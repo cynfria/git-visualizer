@@ -1,0 +1,21 @@
+@import 'tailwindcss';
+
+/* Custom scrollbar for branch map */
+.branch-map-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+.branch-map-scroll::-webkit-scrollbar-track {
+  background: #1c1917;
+}
+.branch-map-scroll::-webkit-scrollbar-thumb {
+  background: #57534e;
+  border-radius: 6px;
+}
+.branch-map-scroll::-webkit-scrollbar-thumb:hover {
+  background: #78716c;
+}
+
+/* Prevent text selection in UI */
+.select-none {
+  user-select: none;
+}
