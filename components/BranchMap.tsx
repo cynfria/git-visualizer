@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { Branch, MergeNode, MergedPR } from '@/types';
 import { useState, useRef, useEffect } from 'react';
+import { ViewMode } from './BranchMapView';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const MAIN_Y = 420;
@@ -39,6 +40,7 @@ export default function BranchMap({
   repo,
   defaultBranch,
   initialHasMore,
+  view = 'time',
 }: {
   branches: Branch[];
   mergeNodes: MergeNode[];
@@ -47,6 +49,7 @@ export default function BranchMap({
   repo: string;
   defaultBranch: string;
   initialHasMore: boolean;
+  view?: ViewMode;
 }) {
   const router = useRouter();
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
@@ -160,9 +163,21 @@ export default function BranchMap({
   }, []);
 
   // ── Separate active vs merged branches ──────────────────────────────────────
+  const STATUS_PRIORITY = { 'conflict-risk': 0, stale: 1, fresh: 2, unknown: 3 };
   const activeBranches = branches
     .filter(b => b.name !== defaultBranch && b.commitsAhead > 0)
-    .sort((a, b) => new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime())
+    .sort((a, b) => {
+      if (view === 'status') {
+        const diff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
+        return diff !== 0 ? diff : new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+      }
+      if (view === 'creator') {
+        const diff = a.lastCommitAuthor.localeCompare(b.lastCommitAuthor);
+        return diff !== 0 ? diff : new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+      }
+      // 'time': most recently committed first
+      return new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+    })
     .slice(0, MAX_ACTIVE);
 
   // Show all fetched merged PRs
