@@ -11,6 +11,7 @@ export interface Branch {
   status: BranchStatus;
   // For branch map positioning
   divergedFromSha?: string;
+  divergedFromDate?: string; // date of the merge-base commit, used for X positioning
   headSha?: string;
 }
 
@@ -23,10 +24,22 @@ export interface Commit {
 }
 
 export interface MergeNode {
-  sha: string;
+  sha: string;       // 7-char for display
+  fullSha: string;   // full SHA for diverge-point matching
   prNumber: number | null;
   prTitle: string | null;
   date: string;
+}
+
+export interface MergedPR {
+  number: number;
+  title: string;
+  branchName: string;
+  authorLogin: string;
+  authorAvatar: string;
+  createdAt: string;  // approximate fork date
+  mergedAt: string;   // when it landed on main
+  commitCount: number;
 }
 
 export interface DiffResult {

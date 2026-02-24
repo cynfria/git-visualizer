@@ -1,4 +1,4 @@
-import { Branch, BranchStatus, Commit, MergeNode, ChangedFile, ComponentGroup } from '@/types';
+import { Branch, BranchStatus, Commit, MergeNode, MergedPR, ChangedFile, ComponentGroup } from '@/types';
 
 const GITHUB_API = 'https://api.github.com';
 const STALE_DAYS = 14;
@@ -26,7 +26,16 @@ export async function fetchBranches(
 
   // Get repo info for default branch
   const repoRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers });
-  if (!repoRes.ok) throw new Error(`Repo fetch failed: ${repoRes.status}`);
+  if (!repoRes.ok) {
+    if (repoRes.status === 404) throw new Error('Repository not found. It may be private or the URL is wrong.');
+    if (repoRes.status === 401) throw new Error('Invalid token. Check your GITHUB_PAT in .env.local.');
+    if (repoRes.status === 403) throw new Error('Access denied. If this is a private org repo, authorize your token for SSO at github.com → Settings → Developer settings → Personal access tokens.');
+    throw new Error(`Repo fetch failed: ${repoRes.status}`);
+  }
+  const contentType = repoRes.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('GitHub returned an unexpected response. If this is a private org repo, you may need to authorize your token for SSO.');
+  }
   const repoData = await repoRes.json();
   const defaultBranch: string = repoData.default_branch ?? 'main';
 
@@ -40,11 +49,26 @@ export async function fetchBranches(
 
   // Compare each branch to default in parallel
   const branches: Branch[] = await Promise.all(
-    branchList.map(async (b: { name: string; commit: { sha: string; commit: { author: { date: string; name: string } } }; }) => {
+    branchList.map(async (b: { name: string; commit: { sha: string } }) => {
       const name: string = b.name;
-      const lastCommitDate: string = b.commit.commit.author.date;
-      const lastCommitAuthor: string = b.commit.commit.author.name;
       const headSha: string = b.commit.sha;
+
+      // Fetch full commit data to get author info (branch list API doesn't include it)
+      let lastCommitDate = new Date().toISOString();
+      let lastCommitAuthor = '';
+      let lastCommitAuthorAvatar = '';
+      try {
+        const commitRes = await fetch(
+          `${GITHUB_API}/repos/${owner}/${repo}/commits/${headSha}`,
+          { headers }
+        );
+        if (commitRes.ok) {
+          const commitData = await commitRes.json();
+          lastCommitDate = commitData.commit?.author?.date ?? lastCommitDate;
+          lastCommitAuthor = commitData.commit?.author?.name ?? '';
+          lastCommitAuthorAvatar = commitData.author?.avatar_url ?? '';
+        }
+      } catch {}
 
       if (name === defaultBranch) {
         return {
@@ -53,7 +77,7 @@ export async function fetchBranches(
           commitsBehind: 0,
           lastCommitDate,
           lastCommitAuthor,
-          lastCommitAuthorAvatar: '',
+          lastCommitAuthorAvatar,
           mergeable: null,
           status: 'fresh' as BranchStatus,
           headSha,
@@ -72,7 +96,7 @@ export async function fetchBranches(
             commitsBehind: 0,
             lastCommitDate,
             lastCommitAuthor,
-            lastCommitAuthorAvatar: '',
+            lastCommitAuthorAvatar,
             mergeable: null,
             status: staleness(lastCommitDate),
             headSha,
@@ -82,6 +106,7 @@ export async function fetchBranches(
         const commitsAhead: number = compare.ahead_by ?? 0;
         const commitsBehind: number = compare.behind_by ?? 0;
         const divergedFromSha: string = compare.merge_base_commit?.sha;
+        const divergedFromDate: string | undefined = compare.merge_base_commit?.commit?.author?.date;
         const mergeable: boolean | null = compare.mergeable ?? null;
 
         let status: BranchStatus;
@@ -90,19 +115,6 @@ export async function fetchBranches(
         } else {
           status = staleness(lastCommitDate);
         }
-
-        // Get author avatar from latest commit
-        let lastCommitAuthorAvatar = '';
-        try {
-          const commitRes = await fetch(
-            `${GITHUB_API}/repos/${owner}/${repo}/commits/${headSha}`,
-            { headers }
-          );
-          if (commitRes.ok) {
-            const commitData = await commitRes.json();
-            lastCommitAuthorAvatar = commitData.author?.avatar_url ?? '';
-          }
-        } catch {}
 
         return {
           name,
@@ -114,6 +126,7 @@ export async function fetchBranches(
           mergeable,
           status,
           divergedFromSha,
+          divergedFromDate,
           headSha,
         };
       } catch {
@@ -123,7 +136,7 @@ export async function fetchBranches(
           commitsBehind: 0,
           lastCommitDate,
           lastCommitAuthor,
-          lastCommitAuthorAvatar: '',
+          lastCommitAuthorAvatar,
           mergeable: null,
           status: 'unknown' as BranchStatus,
           headSha,
@@ -197,6 +210,43 @@ export async function fetchChangedFiles(
   return { files, groups: Array.from(groupMap.values()) };
 }
 
+export async function fetchMergedPRs(
+  owner: string,
+  repo: string,
+  defaultBranch: string,
+  token?: string
+): Promise<MergedPR[]> {
+  const headers = makeHeaders(token);
+  const res = await fetch(
+    `${GITHUB_API}/repos/${owner}/${repo}/pulls?state=closed&base=${defaultBranch}&per_page=100&sort=updated&direction=desc`,
+    { headers }
+  );
+  if (!res.ok) return [];
+  const prs = await res.json();
+  if (!Array.isArray(prs)) return [];
+
+  return prs
+    .filter((pr: { merged_at: string | null }) => pr.merged_at !== null)
+    .map((pr: {
+      number: number;
+      title: string;
+      head: { ref: string; sha: string };
+      user: { login: string; avatar_url: string };
+      created_at: string;
+      merged_at: string;
+      commits: number;
+    }) => ({
+      number: pr.number,
+      title: pr.title,
+      branchName: pr.head.ref,
+      authorLogin: pr.user.login,
+      authorAvatar: pr.user.avatar_url,
+      createdAt: pr.created_at,
+      mergedAt: pr.merged_at,
+      commitCount: pr.commits ?? 3,
+    }));
+}
+
 function cleanFolderLabel(folder: string): string {
   const last = folder.split('/').pop() ?? folder;
   return last
@@ -208,24 +258,37 @@ export async function fetchMainMergeNodes(
   owner: string,
   repo: string,
   defaultBranch: string,
-  token?: string
-): Promise<MergeNode[]> {
+  token?: string,
+  page = 1,
+  perPage = 100,
+): Promise<{ nodes: MergeNode[]; hasMore: boolean }> {
   const headers = makeHeaders(token);
   const res = await fetch(
-    `${GITHUB_API}/repos/${owner}/${repo}/commits?sha=${defaultBranch}&per_page=30`,
+    `${GITHUB_API}/repos/${owner}/${repo}/commits?sha=${defaultBranch}&per_page=${perPage}&page=${page}`,
     { headers }
   );
-  if (!res.ok) return [];
+  if (!res.ok) return { nodes: [], hasMore: false };
   const commits = await res.json();
 
-  return commits.map((c: { sha: string; commit: { message: string; author: { date: string } } }) => {
-    const prMatch = c.commit.message.match(/#(\d+)/);
-    const titleLine = c.commit.message.split('\n')[0];
-    return {
-      sha: c.sha.slice(0, 7),
-      prNumber: prMatch ? parseInt(prMatch[1]) : null,
-      prTitle: titleLine,
-      date: c.commit.author.date,
-    };
-  });
+  // Only keep actual merge commits (2 parents = a PR merge).
+  // This filters out individual feature commits that landed via squash/rebase,
+  // so the main timeline shows one node per merged PR, not one per commit.
+  const nodes = commits
+    .filter((c: { parents: { sha: string }[] }) => c.parents?.length >= 2)
+    .map((c: { sha: string; commit: { message: string; author: { date: string } }; parents: { sha: string }[] }) => {
+      const prMatch = c.commit.message.match(/#(\d+)/);
+      const titleLine = c.commit.message.split('\n')[0];
+      return {
+        sha: c.sha.slice(0, 7),
+        fullSha: c.sha,
+        prNumber: prMatch ? parseInt(prMatch[1]) : null,
+        prTitle: titleLine,
+        date: c.commit.author.date,
+      };
+    });
+
+  // hasMore is based on the raw commit count, not the filtered node count,
+  // since there may be more merge commits in subsequent pages even if this
+  // page happened to have few.
+  return { nodes, hasMore: commits.length === perPage };
 }

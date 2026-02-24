@@ -1,7 +1,7 @@
 import Link from 'next/link';
-import { fetchBranches, fetchMainMergeNodes } from '@/lib/github';
+import { fetchBranches, fetchMainMergeNodes, fetchMergedPRs } from '@/lib/github';
 import BranchMap from '@/components/BranchMap';
-import { Branch } from '@/types';
+import { Branch, MergeNode, MergedPR } from '@/types';
 
 interface Props {
   params: Promise<{ owner: string; repo: string }>;
@@ -14,14 +14,22 @@ export default async function BranchMapPage({ params }: Props) {
 
   let branches: Branch[] = [];
   let defaultBranch = 'main';
-  let mergeNodes: import('@/types').MergeNode[] = [];
+  let mergeNodes: MergeNode[] = [];
+  let mergedPRs: MergedPR[] = [];
+  let initialHasMore = false;
   let fetchError: string | null = null;
 
   try {
     const result = await fetchBranches(owner, repo, token);
     branches = result.branches;
     defaultBranch = result.defaultBranch;
-    mergeNodes = await fetchMainMergeNodes(owner, repo, defaultBranch, token);
+    const [mergeResult, prs] = await Promise.all([
+      fetchMainMergeNodes(owner, repo, defaultBranch, token, 1, 100),
+      fetchMergedPRs(owner, repo, defaultBranch, token),
+    ]);
+    mergeNodes = mergeResult.nodes;
+    initialHasMore = mergeResult.hasMore;
+    mergedPRs = prs;
   } catch (e) {
     fetchError = e instanceof Error ? e.message : 'Failed to fetch branches';
   }
@@ -32,7 +40,6 @@ export default async function BranchMapPage({ params }: Props) {
 
   return (
     <div className="min-h-screen bg-[#F5F5F3]">
-      {/* Header */}
       <header className="flex items-center justify-between px-8 py-5">
         <Link href="/" className="text-stone-400 hover:text-stone-700 transition-colors text-sm">
           ← Back
@@ -64,9 +71,11 @@ export default async function BranchMapPage({ params }: Props) {
           <BranchMap
             branches={branches}
             mergeNodes={mergeNodes}
+            mergedPRs={mergedPRs}
             owner={owner}
             repo={repo}
             defaultBranch={defaultBranch}
+            initialHasMore={initialHasMore}
           />
         </div>
       )}
