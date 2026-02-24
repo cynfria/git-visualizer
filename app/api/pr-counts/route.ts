@@ -12,7 +12,8 @@ function makeHeaders(token?: string) {
 }
 
 // GET /api/pr-counts?owner=&repo=&numbers=1,2,3,...
-// Fetches real commit counts for a list of PR numbers in parallel server-side.
+// Fetches the commit SHAs for each PR in parallel server-side.
+// Returns { [prNumber]: string[] } — array of 7-char SHAs in order.
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const owner = searchParams.get('owner');
@@ -30,25 +31,30 @@ export async function GET(req: NextRequest) {
     .split(',')
     .map((n) => parseInt(n))
     .filter((n) => !isNaN(n))
-    .slice(0, 100); // cap at 100
+    .slice(0, 100);
 
   const results = await Promise.all(
     prNumbers.map(async (num) => {
       try {
-        const res = await fetch(`${GITHUB_API}/repos/${owner}/${repo}/pulls/${num}`, { headers });
-        if (!res.ok) return { number: num, commits: null };
-        const data = await res.json();
-        return { number: num, commits: typeof data.commits === 'number' ? data.commits : null };
+        const res = await fetch(
+          `${GITHUB_API}/repos/${owner}/${repo}/pulls/${num}/commits?per_page=100`,
+          { headers }
+        );
+        if (!res.ok) return { number: num, shas: null };
+        const commits = await res.json();
+        if (!Array.isArray(commits)) return { number: num, shas: null };
+        const shas = commits.map((c: { sha: string }) => c.sha.slice(0, 7));
+        return { number: num, shas };
       } catch {
-        return { number: num, commits: null };
+        return { number: num, shas: null };
       }
     })
   );
 
-  const counts: Record<string, number> = {};
+  const out: Record<string, string[]> = {};
   for (const r of results) {
-    if (r.commits !== null) counts[r.number] = r.commits;
+    if (r.shas !== null) out[r.number] = r.shas;
   }
 
-  return NextResponse.json(counts);
+  return NextResponse.json(out);
 }

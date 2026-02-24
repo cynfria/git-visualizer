@@ -54,7 +54,7 @@ export default function BranchMap({
   const [hoveredPR, setHoveredPR] = useState<number | null>(null);
   const [hoveredPRCommit, setHoveredPRCommit] = useState<PRCommitHover | null>(null);
   const [zoom, setZoom] = useState(1);
-  const [prCommitCounts, setPrCommitCounts] = useState<Map<number, number>>(new Map());
+  const [prCommits, setPrCommits] = useState<Map<number, string[]>>(new Map());
 
   // Pagination state
   const [allNodes, setAllNodes] = useState<MergeNode[]>(mergeNodes);
@@ -152,8 +152,8 @@ export default function BranchMap({
     const numbers = mergedPRs.map((pr) => pr.number).join(',');
     fetch(`/api/pr-counts?owner=${owner}&repo=${repo}&numbers=${numbers}`)
       .then((r) => r.json())
-      .then((counts: Record<string, number>) => {
-        setPrCommitCounts(new Map(Object.entries(counts).map(([k, v]) => [parseInt(k), v])));
+      .then((data: Record<string, string[]>) => {
+        setPrCommits(new Map(Object.entries(data).map(([k, v]) => [parseInt(k), v])));
       })
       .catch(() => {});
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -295,7 +295,8 @@ export default function BranchMap({
           const mergeX = timeToX(pr.mergedAt);
           const lane = idx % MERGED_LANES;
           const arcY = MAIN_Y - MERGED_LANE_HEIGHT * (lane + 1);
-          const commitCount = Math.min(prCommitCounts.get(pr.number) ?? pr.commitCount ?? 1, 12);
+          const shas = prCommits.get(pr.number);
+          const commitCount = Math.min(shas?.length ?? pr.commitCount ?? 1, 12);
           const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
 
           const isHovered = hoveredPR === pr.number;
@@ -492,7 +493,7 @@ export default function BranchMap({
 
         {/* ── PR commit tick tooltip ── */}
         {hoveredPRCommit && (() => {
-          const { x, arcY, pr, commitIdx, total } = hoveredPRCommit;
+          const { x, arcY, pr, commitIdx } = hoveredPRCommit;
           const TW = 200;
           const TH = 68;
           const tx = x - TW / 2;
@@ -502,11 +503,11 @@ export default function BranchMap({
               <rect x={tx} y={ty} width={TW} height={TH} rx={5}
                 fill="white" stroke="#e5e7eb" strokeWidth={1}
                 filter="url(#tick-shadow)" />
-              <text x={tx + 10} y={ty + 18} fontSize={11} fontWeight={600} fill="#111827">
-                PR #{pr.number} · commit {commitIdx + 1}/{total}
+              <text x={tx + 10} y={ty + 18} fontSize={11} fontWeight={600} fill="#111827" fontFamily="monospace">
+                {prCommits.get(pr.number)?.[commitIdx] ?? `commit ${commitIdx + 1}`}
               </text>
               <text x={tx + 10} y={ty + 33} fontSize={10} fill="#6b7280">
-                {pr.branchName.length > 28 ? pr.branchName.slice(0, 28) + '…' : pr.branchName}
+                PR #{pr.number} · {pr.branchName.length > 22 ? pr.branchName.slice(0, 22) + '…' : pr.branchName}
               </text>
               <text x={tx + 10} y={ty + 48} fontSize={10} fill="#9ca3af">
                 @{pr.authorLogin} · merged {fmtLabelDate(pr.mergedAt)}
