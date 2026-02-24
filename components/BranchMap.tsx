@@ -54,6 +54,7 @@ export default function BranchMap({
   const [hoveredPR, setHoveredPR] = useState<number | null>(null);
   const [hoveredPRCommit, setHoveredPRCommit] = useState<PRCommitHover | null>(null);
   const [zoom, setZoom] = useState(1);
+  const [prCommitCounts, setPrCommitCounts] = useState<Map<number, number>>(new Map());
 
   // Pagination state
   const [allNodes, setAllNodes] = useState<MergeNode[]>(mergeNodes);
@@ -144,6 +145,19 @@ export default function BranchMap({
       }
     });
   }, [zoom]);
+
+  // Fetch real commit counts for loaded PRs (the list API doesn't include this field)
+  useEffect(() => {
+    if (mergedPRs.length === 0) return;
+    const numbers = mergedPRs.map((pr) => pr.number).join(',');
+    fetch(`/api/pr-counts?owner=${owner}&repo=${repo}&numbers=${numbers}`)
+      .then((r) => r.json())
+      .then((counts: Record<string, number>) => {
+        setPrCommitCounts(new Map(Object.entries(counts).map(([k, v]) => [parseInt(k), v])));
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Separate active vs merged branches ──────────────────────────────────────
   const activeBranches = branches
@@ -281,7 +295,7 @@ export default function BranchMap({
           const mergeX = timeToX(pr.mergedAt);
           const lane = idx % MERGED_LANES;
           const arcY = MAIN_Y - MERGED_LANE_HEIGHT * (lane + 1);
-          const commitCount = Math.min(pr.commitCount || 3, 8);
+          const commitCount = Math.min(prCommitCounts.get(pr.number) ?? pr.commitCount ?? 1, 12);
           const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
 
           const isHovered = hoveredPR === pr.number;
