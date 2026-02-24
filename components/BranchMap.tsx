@@ -517,32 +517,34 @@ export default function BranchMap({
         )}
       </svg>
 
-      {/* Loading indicator — appears at the left edge while fetching older history */}
+      {/* Loading indicator */}
       {loadingMore && (
-        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 bg-white border border-stone-200 rounded-full px-3 py-1.5 shadow-sm">
-          <div className="w-3 h-3 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
-          <span className="text-xs text-stone-500">Loading older history…</span>
+        <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 bg-card border border-border rounded-full px-3 py-1.5 shadow-sm">
+          <div className="w-3 h-3 border-2 border-border border-t-foreground rounded-full animate-spin" />
+          <span className="text-xs text-muted-foreground">Loading history…</span>
         </div>
       )}
       {!hasMore && allNodes.length > 30 && (
-        <p className="text-xs text-stone-400 mt-2 pl-2">Showing full history ({allNodes.length} commits)</p>
+        <p className="text-xs text-muted-foreground mt-2 pl-2">
+          {allNodes.length} merge commits loaded
+        </p>
       )}
 
     </div>
 
-      {/* Zoom controls — outside the scroll div so they stay pinned to the corner */}
-      <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-white border border-stone-200 rounded-lg shadow-sm px-2 py-1.5">
+      {/* Zoom controls */}
+      <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-card border border-border rounded-lg shadow-sm px-2 py-1.5">
         <button
           onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
-          className="w-6 h-6 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-50 rounded transition-colors text-base leading-none"
+          className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
           title="Zoom out"
         >
           −
         </button>
-        <span className="text-xs text-stone-500 w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
+        <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
         <button
           onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
-          className="w-6 h-6 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-50 rounded transition-colors text-base leading-none"
+          className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
           title="Zoom in"
         >
           +

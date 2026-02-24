@@ -36,13 +36,13 @@ export default function LandingPage() {
   }
 
   return (
-    <main className="flex h-screen overflow-hidden bg-[#F5F5F3]">
+    <main className="flex h-screen overflow-hidden bg-background">
       {/* Left decorative panel */}
-      <div className="w-[42%] relative flex-shrink-0 bg-[#EBEBEA] overflow-hidden">
+      <div className="w-[42%] relative flex-shrink-0 bg-muted overflow-hidden">
         <DotCircle size={320} left="38%" top="34%" />
         <DotCircle size={280} left="52%" top="68%" />
         <div
-          className="absolute text-[9px] text-stone-400 tracking-widest font-mono leading-4"
+          className="absolute text-[9px] text-muted-foreground tracking-widest font-mono leading-4"
           style={{ top: '44%', left: '58%', transform: 'rotate(90deg)', transformOrigin: 'left top' }}
         >
           59.9139°N<br />10.7522°E
@@ -50,28 +50,32 @@ export default function LandingPage() {
       </div>
 
       {/* Right content panel */}
-      <div className="flex-1 flex flex-col justify-center px-16 bg-white">
-        <p className="text-sm text-stone-400 mb-3 tracking-wide">Git visualizer</p>
-        <h1 className="text-[2.5rem] font-bold leading-[1.15] text-stone-900 mb-14 max-w-xs">
-          See what your team is building, without reading a line of code.
+      <div className="flex-1 flex flex-col justify-center px-16 bg-card">
+        <p className="text-[10px] text-muted-foreground mb-3 tracking-widest uppercase font-medium">
+          Git visualizer
+        </p>
+        <h1 className="text-[2.4rem] font-semibold leading-[1.15] text-foreground mb-12 max-w-xs">
+          See what your team is building.
         </h1>
 
-        <p className="text-sm text-stone-500 mb-4">Get started</p>
+        <p className="text-[10px] text-muted-foreground mb-4 uppercase tracking-widest font-medium">
+          Get started
+        </p>
 
-        <div className="flex flex-col gap-3 w-64">
+        <div className="flex flex-col gap-2.5 w-60">
           <button
             onClick={() => signIn('github')}
-            className="px-6 py-3 border border-stone-900 text-stone-900 text-sm hover:bg-stone-900 hover:text-white transition-colors text-center"
+            className="px-5 py-2.5 rounded-lg border border-border text-foreground text-sm hover:bg-accent transition-colors text-center"
           >
-            Connect Github
+            Connect GitHub
           </button>
 
           {!showInput ? (
             <button
               onClick={() => setShowInput(true)}
-              className="px-6 py-3 border border-stone-900 text-stone-900 text-sm hover:bg-stone-900 hover:text-white transition-colors text-center"
+              className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm hover:opacity-90 transition-opacity text-center"
             >
-              Enter Github repo link
+              Enter repo URL
             </button>
           ) : (
             <form onSubmit={handleSubmit} className="flex flex-col gap-2">
@@ -81,12 +85,12 @@ export default function LandingPage() {
                 value={inputValue}
                 onChange={(e) => { setInputValue(e.target.value); setError(''); }}
                 placeholder="https://github.com/owner/repo"
-                className="px-4 py-3 border border-stone-900 text-sm text-stone-900 placeholder-stone-400 outline-none focus:ring-1 focus:ring-stone-900"
+                className="px-4 py-2.5 rounded-lg border border-border bg-background text-sm text-foreground placeholder:text-muted-foreground outline-none focus:ring-1 focus:ring-primary transition-colors"
               />
-              {error && <p className="text-xs text-red-500">{error}</p>}
+              {error && <p className="text-xs text-destructive">{error}</p>}
               <button
                 type="submit"
-                className="px-6 py-3 bg-stone-900 text-white text-sm hover:bg-stone-700 transition-colors"
+                className="px-5 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm hover:opacity-90 transition-opacity"
               >
                 View branches →
               </button>
@@ -116,7 +120,8 @@ function DotCircle({ size, left, top }: { size: number; left: string; top: strin
     <div className="absolute" style={{ left, top, transform: 'translate(-50%, -50%)' }}>
       <svg width={size} height={size} viewBox={`${-r} ${-r} ${size} ${size}`}>
         {dots.map((d, i) => (
-          <circle key={i} cx={d.x} cy={d.y} r={1.3} fill="#9ca3af" opacity={d.opacity * 0.6} />
+          <circle key={i} cx={d.x} cy={d.y} r={1.3} fill="currentColor"
+            className="text-muted-foreground" opacity={d.opacity * 0.45} />
         ))}
       </svg>
     </div>

@@ -39,31 +39,31 @@ export default async function BranchMapPage({ params }: Props) {
   );
 
   return (
-    <div className="min-h-screen bg-[#F5F5F3]">
-      <header className="flex items-center justify-between px-8 py-5">
-        <Link href="/" className="text-stone-400 hover:text-stone-700 transition-colors text-sm">
+    <div className="min-h-screen bg-background">
+      <header className="relative flex items-center justify-between px-8 py-4 border-b border-border/50">
+        <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors text-sm">
           ← Back
         </Link>
-        <h1 className="text-base font-medium text-stone-900 absolute left-1/2 -translate-x-1/2">
+        <h1 className="text-sm font-medium text-foreground absolute left-1/2 -translate-x-1/2">
           {owner}/{repo}
         </h1>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
           {errorBranches.length > 0 && (
-            <span className="flex items-center gap-1.5 text-sm text-red-600 border border-red-200 rounded-full px-3 py-1 bg-white">
+            <span className="flex items-center gap-1.5 text-xs text-destructive border border-destructive/20 rounded-full px-3 py-1 bg-destructive/5">
               ⚠ {errorBranches.length} branch error{errorBranches.length !== 1 ? 's' : ''}
             </span>
           )}
-          <span className="text-xs text-stone-500 border border-stone-200 rounded-full px-3 py-1 bg-white">
-            View: By time
+          <span className="text-xs text-muted-foreground border border-border rounded-full px-3 py-1 bg-card">
+            By time
           </span>
         </div>
       </header>
 
       {fetchError ? (
         <div className="flex items-center justify-center pt-32">
-          <div className="text-center">
-            <p className="text-stone-500 mb-2">Could not load repository</p>
-            <p className="text-sm text-stone-400">{fetchError}</p>
+          <div className="text-center bg-muted/30 shadow-inner rounded-xl px-10 py-8">
+            <p className="text-sm font-medium text-foreground mb-1">Could not load repository</p>
+            <p className="text-sm text-muted-foreground">{fetchError}</p>
           </div>
         </div>
       ) : (
