@@ -5,6 +5,7 @@ import { ArrowLeft, ChevronDown, Check } from 'lucide-react';
 import { Branch, MergeNode, MergedPR } from '@/types';
 import { useState, useRef, useEffect } from 'react';
 import BranchMap from './BranchMap';
+import BranchGroupView from './BranchGroupView';
 
 export type ViewMode = 'time' | 'status' | 'creator';
 
@@ -102,7 +103,7 @@ export default function BranchMapView({
             <p className="text-sm text-muted-foreground">{fetchError}</p>
           </div>
         </div>
-      ) : (
+      ) : view === 'time' ? (
         <div className="px-8 pt-4 pb-16">
           <BranchMap
             branches={branches}
@@ -113,6 +114,16 @@ export default function BranchMapView({
             defaultBranch={defaultBranch}
             initialHasMore={initialHasMore}
             view={view}
+          />
+        </div>
+      ) : (
+        <div className="px-8 pt-6 pb-16">
+          <BranchGroupView
+            view={view}
+            branches={branches}
+            owner={owner}
+            repo={repo}
+            defaultBranch={defaultBranch}
           />
         </div>
       )}
