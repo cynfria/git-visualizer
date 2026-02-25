@@ -20,34 +20,40 @@ function staleness(lastCommitDate: string): BranchStatus {
 export async function fetchBranches(
   owner: string,
   repo: string,
-  token?: string
-): Promise<{ branches: Branch[]; defaultBranch: string }> {
+  token?: string,
+  page = 1,
+  knownDefaultBranch?: string,
+): Promise<{ branches: Branch[]; defaultBranch: string; hasMore: boolean }> {
   const headers = makeHeaders(token);
 
-  // Get repo info for default branch
-  const repoRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers });
-  if (!repoRes.ok) {
-    let ghMessage = '';
-    try { ghMessage = (await repoRes.json()).message ?? ''; } catch {}
-    if (repoRes.status === 404) throw new Error(`Repository not found (404)${ghMessage ? ': ' + ghMessage : ''}`);
-    if (repoRes.status === 401) throw new Error(`Invalid token (401)${ghMessage ? ': ' + ghMessage : ''}`);
-    if (repoRes.status === 403) throw new Error(`Access denied (403)${ghMessage ? ': ' + ghMessage : ''}`);
-    throw new Error(`GitHub error ${repoRes.status}${ghMessage ? ': ' + ghMessage : ''}`);
+  // Get repo info for default branch (skip on subsequent pages when already known)
+  let defaultBranch = knownDefaultBranch ?? 'main';
+  if (!knownDefaultBranch) {
+    const repoRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers });
+    if (!repoRes.ok) {
+      let ghMessage = '';
+      try { ghMessage = (await repoRes.json()).message ?? ''; } catch {}
+      if (repoRes.status === 404) throw new Error(`Repository not found (404)${ghMessage ? ': ' + ghMessage : ''}`);
+      if (repoRes.status === 401) throw new Error(`Invalid token (401)${ghMessage ? ': ' + ghMessage : ''}`);
+      if (repoRes.status === 403) throw new Error(`Access denied (403)${ghMessage ? ': ' + ghMessage : ''}`);
+      throw new Error(`GitHub error ${repoRes.status}${ghMessage ? ': ' + ghMessage : ''}`);
+    }
+    const contentType = repoRes.headers.get('content-type') ?? '';
+    if (!contentType.includes('application/json')) {
+      throw new Error('GitHub returned an unexpected response. If this is a private org repo, you may need to authorize your token for SSO.');
+    }
+    const repoData = await repoRes.json();
+    defaultBranch = repoData.default_branch ?? 'main';
   }
-  const contentType = repoRes.headers.get('content-type') ?? '';
-  if (!contentType.includes('application/json')) {
-    throw new Error('GitHub returned an unexpected response. If this is a private org repo, you may need to authorize your token for SSO.');
-  }
-  const repoData = await repoRes.json();
-  const defaultBranch: string = repoData.default_branch ?? 'main';
 
-  // List all branches
+  // List one page of branches
   const branchListRes = await fetch(
-    `${GITHUB_API}/repos/${owner}/${repo}/branches?per_page=100`,
+    `${GITHUB_API}/repos/${owner}/${repo}/branches?per_page=100&page=${page}`,
     { headers }
   );
   if (!branchListRes.ok) throw new Error(`Branches fetch failed: ${branchListRes.status}`);
-  const branchList = await branchListRes.json();
+  const branchList: { name: string; commit: { sha: string } }[] = await branchListRes.json();
+  const hasMore = branchList.length === 100;
 
   // Compare each branch to default in parallel
   const branches: Branch[] = await Promise.all(
@@ -147,7 +153,7 @@ export async function fetchBranches(
     })
   );
 
-  return { branches, defaultBranch };
+  return { branches, defaultBranch, hasMore };
 }
 
 export async function fetchBranchCommits(

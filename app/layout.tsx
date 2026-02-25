@@ -9,7 +9,7 @@ const spaceGrotesk = localFont({
     { path: '../public/fonts/SpaceGrotesk-Medium.otf',  weight: '500', style: 'normal' },
     { path: '../public/fonts/SpaceGrotesk-Bold.otf',    weight: '700', style: 'normal' },
   ],
-  variable: '--font-sans',
+  variable: '--font-space-grotesk',
 });
 
 export const metadata: Metadata = {
@@ -20,7 +20,7 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${spaceGrotesk.variable} antialiased`}>
+      <body className={`${spaceGrotesk.variable} antialiased`} style={{ fontFamily: 'var(--font-space-grotesk), system-ui, sans-serif' }}>
         {children}
       </body>
     </html>

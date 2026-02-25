@@ -219,9 +219,18 @@ export default function BranchMap({
 
   // ── Separate active vs merged branches ──────────────────────────────────────
   const STATUS_PRIORITY = { 'conflict-risk': 0, stale: 1, fresh: 2, unknown: 3 };
-  const mergedBranchNames = new Set(mergedPRs.map(pr => pr.branchName));
+  // Map branch name → mergedAt so we can do date-aware filtering.
+  // A branch is excluded only if it was merged AND hasn't had new commits since.
+  // This handles the case where a branch name is reused after an old PR was merged.
+  const mergedBranchDates = new Map(mergedPRs.map(pr => [pr.branchName, pr.mergedAt]));
   const activeBranches = branches
-    .filter(b => b.name !== defaultBranch && !mergedBranchNames.has(b.name))
+    .filter(b => {
+      if (b.name === defaultBranch) return false;
+      const mergedAt = mergedBranchDates.get(b.name);
+      if (!mergedAt) return true;
+      // Show if the branch has been updated after the PR was merged (new branch, same name)
+      return new Date(b.lastCommitDate) > new Date(mergedAt);
+    })
     .sort((a, b) => {
       if (view === 'status') {
         const diff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
@@ -238,6 +247,7 @@ export default function BranchMap({
 
   // Show all fetched merged PRs
   const displayedMergedPRs = mergedPRs;
+
 
   // ── Build a date → X mapping ─────────────────────────────────────────────
   // Sort merge nodes chronologically and space them evenly by index.
@@ -483,8 +493,9 @@ export default function BranchMap({
         {activeBranches.map((b) => {
           const forkX = branchForkX(b);
           const y = laneY(b);
-          const isError = b.status === 'conflict-risk';
-          const color = isError ? '#dc2626' : '#6b7280';
+          const isConflict = b.status === 'conflict-risk';
+          const isStale = b.status === 'stale';
+          const color = isConflict ? '#dc2626' : isStale ? '#d97706' : '#6b7280';
           const isHovered = hoveredBranch === b.name;
 
           const TRAIL = 80; // fixed dashed trail length in px
@@ -536,13 +547,17 @@ export default function BranchMap({
               <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                 width={NODE_SIZE} height={NODE_SIZE}
                 fill="white" stroke={color} strokeWidth={1.5} />
+              {/* Branch name label below main line */}
+              <text x={forkX} y={mainY + 20} textAnchor="middle" fontSize={10} fill="#9ca3af">
+                {b.name.length > 18 ? b.name.slice(0, 18) + '…' : b.name}
+              </text>
 
               {/* Commit filled squares along branch */}
               {commitXs.map((cx, ci) => (
                 <rect key={ci}
                   x={cx - NODE_SIZE / 2} y={y - NODE_SIZE / 2}
                   width={NODE_SIZE} height={NODE_SIZE}
-                  fill={isError ? '#dc2626' : '#9ca3af'}
+                  fill={isConflict ? '#dc2626' : isStale ? '#d97706' : '#9ca3af'}
                   onMouseEnter={() => setTooltip({
                     x: cx, y: y - 16,
                     lines: [
@@ -577,16 +592,14 @@ export default function BranchMap({
 
               {/* Status icons below main line */}
               {b.status === 'stale' && (
-                <g>
-                  <title>Out of date — no commits in 14+ days</title>
-                  <text x={forkX - 8} y={mainY + 62} fontSize={13}>📅</text>
-                </g>
+                <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#d97706">
+                  stale
+                </text>
               )}
               {b.status === 'conflict-risk' && (
-                <g>
-                  <title>Conflict risk — branch cannot be merged cleanly</title>
-                  <text x={forkX - 8} y={mainY + 62} fontSize={13} fill="#dc2626">⚠</text>
-                </g>
+                <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#dc2626">
+                  conflict
+                </text>
               )}
             </g>
           );

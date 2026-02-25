@@ -10,10 +10,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'owner and repo are required' }, { status: 400 });
   }
 
+  const page = parseInt(searchParams.get('page') ?? '1', 10);
+  const knownDefaultBranch = searchParams.get('defaultBranch') ?? undefined;
   const token: string | undefined = process.env.GITHUB_PAT;
 
   try {
-    const result = await fetchBranches(owner, repo, token);
+    const result = await fetchBranches(owner, repo, token, page, knownDefaultBranch);
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Unknown error';

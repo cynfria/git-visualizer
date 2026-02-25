@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { ArrowLeft, TriangleAlert } from 'lucide-react';
 import { fetchBranches, fetchBranchCommits, fetchChangedFiles } from '@/lib/github';
 import DiffViewer from '@/components/DiffViewer';
+import { PageHeader } from '@/components/PageHeader';
 import type { Commit, ComponentGroup } from '@/types';
 
 interface Props {
@@ -32,25 +33,27 @@ export default async function DiffPage({ params }: Props) {
 
   return (
     <div className="h-screen flex flex-col bg-background">
-      <header className="relative flex items-center justify-between px-8 py-4 shrink-0 border-b border-border/50">
-        <Link
-          href={`/repo/${owner}/${repo}`}
-          className="text-muted-foreground hover:text-foreground transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-        </Link>
-        <h1 className="text-sm font-medium text-foreground absolute left-1/2 -translate-x-1/2">
-          {owner}/{branch}
-        </h1>
-        {isOutOfDate ? (
-          <span className="flex items-center gap-1.5 text-xs text-destructive">
-            <TriangleAlert className="w-3.5 h-3.5 shrink-0" />
-            Branch out of date
-          </span>
-        ) : (
-          <div />
-        )}
-      </header>
+      <PageHeader
+        left={
+          <Link
+            href={`/repo/${owner}/${repo}`}
+            className="text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </Link>
+        }
+        center={
+          <h1 className="text-sm font-medium text-foreground">{owner}/{branch}</h1>
+        }
+        right={
+          isOutOfDate ? (
+            <span className="flex items-center gap-1.5 text-xs text-destructive">
+              <TriangleAlert className="w-3.5 h-3.5 shrink-0" />
+              Branch out of date
+            </span>
+          ) : undefined
+        }
+      />
 
       <div className="flex-1 min-h-0 px-6 py-6">
         <DiffViewer
