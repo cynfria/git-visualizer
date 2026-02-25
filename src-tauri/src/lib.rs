@@ -1,6 +1,8 @@
 mod git;
+mod github;
 
 use git::{Branch, MergeNode};
+use github::{GitHubInfo, MergedPR};
 use std::path::Path;
 
 #[derive(serde::Serialize)]
@@ -312,6 +314,27 @@ fn get_repo_info(repo_path: String) -> Result<RepoInfo, String> {
     })
 }
 
+// =============================================================================
+// GitHub Integration
+// =============================================================================
+
+#[tauri::command]
+fn get_github_info(repo_path: String) -> Result<GitHubInfo, String> {
+    let path = Path::new(&repo_path);
+    github::get_github_info(path)
+}
+
+#[tauri::command(rename_all = "camelCase")]
+fn get_merged_prs(
+    owner: String,
+    repo: String,
+    base_branch: String,
+    limit: Option<usize>,
+) -> Result<Vec<MergedPR>, String> {
+    let limit = limit.unwrap_or(50);
+    github::get_merged_prs(&owner, &repo, &base_branch, limit)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -320,6 +343,8 @@ pub fn run() {
             get_merge_nodes,
             get_default_branch,
             get_repo_info,
+            get_github_info,
+            get_merged_prs,
             list_directory,
             search_directories,
             get_home_dir,

@@ -29,6 +29,24 @@ export interface MergeNode {
   date: string;
 }
 
+export interface MergedPR {
+  number: number;
+  title: string;
+  branchName: string;
+  authorLogin: string;
+  authorAvatar: string;
+  createdAt: string;
+  mergedAt: string;
+  mergeCommitSha: string;
+  commitCount: number;
+}
+
+export interface GitHubInfo {
+  owner: string;
+  repo: string;
+  ghAvailable: boolean;
+}
+
 export interface ChangedFile {
   filename: string;
   additions: number;
