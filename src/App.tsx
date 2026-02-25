@@ -66,13 +66,23 @@ function App() {
     (b) => b.status === 'conflict-risk' || b.status === 'stale'
   );
 
+  function handleBranchSelect(branch: Branch) {
+    // Toggle selection if clicking the same branch
+    setSelectedBranch((prev) => (prev?.name === branch.name ? null : branch));
+  }
+
   function handleBranchClick(branch: Branch) {
     setSelectedBranch(branch);
     setView('diff');
   }
 
+  function handleViewDiff() {
+    if (selectedBranch) {
+      setView('diff');
+    }
+  }
+
   function handleBackToMap() {
-    setSelectedBranch(null);
     setView('map');
   }
 
@@ -100,6 +110,25 @@ function App() {
               {repoName}
             </h1>
             <div className="flex items-center gap-3">
+              {selectedBranch && (
+                <div className="flex items-center gap-2">
+                  <span className="text-sm text-cyan-400 border border-cyan-800 rounded-full px-3 py-1 bg-cyan-950/50">
+                    {selectedBranch.name}
+                  </span>
+                  <button
+                    onClick={handleViewDiff}
+                    className="text-sm text-stone-100 border border-stone-600 rounded-full px-3 py-1 bg-stone-700 hover:bg-stone-600 transition-colors"
+                  >
+                    View diff →
+                  </button>
+                  <button
+                    onClick={() => setSelectedBranch(null)}
+                    className="text-stone-500 hover:text-stone-300 text-sm"
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
               {errorBranches.length > 0 && (
                 <span className="flex items-center gap-1.5 text-sm text-red-400 border border-red-800 rounded-full px-3 py-1 bg-red-950/50">
                   ⚠ {errorBranches.length} branch error{errorBranches.length !== 1 ? 's' : ''}
@@ -115,8 +144,10 @@ function App() {
               branches={branches}
               mergeNodes={mergeNodes}
               defaultBranch={defaultBranch}
-              onLoadMore={loadMoreNodes}
+              selectedBranch={selectedBranch}
+              onBranchSelect={handleBranchSelect}
               onBranchClick={handleBranchClick}
+              onLoadMore={loadMoreNodes}
             />
           </div>
         </>

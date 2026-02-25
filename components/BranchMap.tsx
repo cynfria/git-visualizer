@@ -38,6 +38,8 @@ interface BranchMapProps {
   branches: Branch[];
   mergeNodes: MergeNode[];
   defaultBranch: string;
+  selectedBranch?: Branch | null;
+  onBranchSelect?: (branch: Branch) => void;
   onBranchClick?: (branch: Branch) => void;
   onLoadMore?: () => void;
 }
@@ -46,6 +48,8 @@ export default function BranchMap({
   branches,
   mergeNodes,
   defaultBranch,
+  selectedBranch,
+  onBranchSelect,
   onBranchClick,
 }: BranchMapProps) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
@@ -278,8 +282,19 @@ export default function BranchMap({
               const forkX = branchForkX(b);
               const y = laneY(b);
               const isError = b.status === 'conflict-risk';
-              const color = isError ? '#ef4444' : '#a8a29e';
+              const isSelected = selectedBranch?.name === b.name;
               const isHovered = hoveredBranch === b.name;
+              const hasSelection = selectedBranch != null;
+
+              // Color logic: selected = bright cyan, error = red, default = stone
+              const color = isSelected
+                ? '#22d3ee' // cyan-400
+                : isError
+                ? '#ef4444'
+                : hasSelection
+                ? '#57534e' // dimmed when another branch is selected
+                : '#a8a29e';
+              const strokeWidth = isSelected ? 2.5 : 1.5;
 
               const TRAIL = 80;
 
@@ -295,13 +310,30 @@ export default function BranchMap({
               );
 
               return (
-                <g key={b.name}>
+                <g
+                  key={b.name}
+                  className="cursor-pointer"
+                  onClick={() => onBranchSelect?.(b)}
+                  onDoubleClick={() => onBranchClick?.(b)}
+                  style={{ opacity: hasSelection && !isSelected ? 0.5 : 1 }}
+                >
+                  {/* Glow effect for selected branch */}
+                  {isSelected && (
+                    <path
+                      d={curvePath}
+                      fill="none"
+                      stroke="#22d3ee"
+                      strokeWidth={8}
+                      strokeOpacity={0.25}
+                      style={{ filter: 'blur(4px)' }}
+                    />
+                  )}
                   {/* Branch path */}
                   <path
                     d={curvePath}
                     fill="none"
                     stroke={color}
-                    strokeWidth={1.5}
+                    strokeWidth={strokeWidth}
                   />
                   {/* Dashed trailing edge */}
                   <line
@@ -310,7 +342,7 @@ export default function BranchMap({
                     x2={tipX + TRAIL}
                     y2={y}
                     stroke={color}
-                    strokeWidth={1.5}
+                    strokeWidth={strokeWidth}
                     strokeDasharray="6 5"
                   />
 
@@ -320,9 +352,9 @@ export default function BranchMap({
                     y={MAIN_Y - NODE_SIZE / 2}
                     width={NODE_SIZE}
                     height={NODE_SIZE}
-                    fill="#1c1917"
+                    fill={isSelected ? '#22d3ee' : '#1c1917'}
                     stroke={color}
-                    strokeWidth={1.5}
+                    strokeWidth={strokeWidth}
                   />
 
                   {/* Commit filled squares along branch */}
@@ -333,8 +365,7 @@ export default function BranchMap({
                       y={y - NODE_SIZE / 2}
                       width={NODE_SIZE}
                       height={NODE_SIZE}
-                      fill={isError ? '#ef4444' : '#78716c'}
-                      className="cursor-pointer"
+                      fill={isSelected ? '#22d3ee' : isError ? '#ef4444' : '#78716c'}
                       onMouseEnter={() =>
                         setTooltip({
                           x: cx,
@@ -351,13 +382,13 @@ export default function BranchMap({
                   ))}
 
                   {/* Author initial circle */}
-                  <circle cx={forkX} cy={y - 26} r={9} fill="#57534e" />
+                  <circle cx={forkX} cy={y - 26} r={9} fill={isSelected ? '#0891b2' : '#57534e'} />
                   <text
                     x={forkX}
                     y={y - 22}
                     textAnchor="middle"
                     fontSize={10}
-                    fill="#e7e5e4"
+                    fill={isSelected ? '#ecfeff' : '#e7e5e4'}
                     fontWeight={500}
                   >
                     {b.lastCommitAuthor?.charAt(0).toUpperCase() || '?'}
@@ -367,12 +398,12 @@ export default function BranchMap({
                   <text
                     x={forkX + 16}
                     y={y - 22}
-                    fontSize={12}
-                    fill={isHovered ? '#fafaf9' : color}
-                    className="cursor-pointer select-none"
+                    fontSize={isSelected ? 13 : 12}
+                    fontWeight={isSelected ? 600 : 400}
+                    fill={isSelected ? '#22d3ee' : isHovered ? '#fafaf9' : color}
+                    className="select-none"
                     onMouseEnter={() => setHoveredBranch(b.name)}
                     onMouseLeave={() => setHoveredBranch(null)}
-                    onClick={() => onBranchClick?.(b)}
                   >
                     {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
                   </text>
