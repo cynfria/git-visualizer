@@ -1,7 +1,8 @@
 'use client';
 
+import React, { useState, useRef, useEffect } from 'react';
+import { X } from 'lucide-react';
 import { Branch, MergeNode, MergedPR } from '@/types';
-import { useState, useRef, useEffect } from 'react';
 import { ViewMode } from './BranchMapView';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
@@ -17,6 +18,15 @@ const ZOOM_MAX = 4;
 
 type TooltipData = { x: number; y: number; lines: string[] };
 type PRCommitHover = { x: number; arcY: number; pr: MergedPR; commitIdx: number; total: number };
+
+function fmtRelativeDate(dateStr: string): string {
+  const diffDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (diffDays === 0) return 'today';
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  return `${Math.floor(diffDays / 30)}mo ago`;
+}
 
 function fmtTooltipDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -39,6 +49,8 @@ export default function BranchMap({
   defaultBranch,
   initialHasMore,
   view = 'time',
+  conflictBranches = [],
+  staleBranches = [],
 }: {
   branches: Branch[];
   mergeNodes: MergeNode[];
@@ -48,6 +60,8 @@ export default function BranchMap({
   defaultBranch: string;
   initialHasMore: boolean;
   view?: ViewMode;
+  conflictBranches?: Branch[];
+  staleBranches?: Branch[];
 }) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
@@ -75,6 +89,11 @@ export default function BranchMap({
   const [barScrollMax, setBarScrollMax] = useState(0);
   const [thumbWidth, setThumbWidth] = useState(48);
   const barRangeRef = useRef<HTMLInputElement>(null);
+
+  // PR issues panel state
+  const errorBranches = [...conflictBranches, ...staleBranches];
+  const [errorPanelOpen, setErrorPanelOpen] = useState(false);
+  const errorPanelRef = useRef<HTMLDivElement>(null);
 
   // Responsive height
   const [containerHeight, setContainerHeight] = useState(540);
@@ -187,6 +206,16 @@ export default function BranchMap({
     };
   }, []);
 
+  // Close error panel on outside click
+  useEffect(() => {
+    if (!errorPanelOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!errorPanelRef.current?.contains(e.target as Node)) setErrorPanelOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [errorPanelOpen]);
+
   // Fetch real commit counts for loaded PRs (the list API doesn't include this field)
   useEffect(() => {
     if (mergedPRs.length === 0) return;
@@ -247,6 +276,19 @@ export default function BranchMap({
 
   // Show all fetched merged PRs
   const displayedMergedPRs = mergedPRs;
+
+  // ── Animation delays: sort all arcs newest → oldest, stagger after main line ─
+  const MAIN_DRAW_MS = 1400;
+  const STAGGER_MS   = 70;
+  const INFO_OFFSET  = 600; // ms after arc starts drawing before info fades in
+  const arcDelayMs = new Map<string, number>(
+    [
+      ...displayedMergedPRs.map(pr => ({ key: `pr-${pr.number}`, date: pr.mergedAt })),
+      ...activeBranches.map(b  => ({ key: `br-${b.name}`,        date: b.lastCommitDate })),
+    ]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .map(({ key }, i) => [key, MAIN_DRAW_MS + i * STAGGER_MS] as [string, number])
+  );
 
 
   // ── Build a date → X mapping ─────────────────────────────────────────────
@@ -361,29 +403,32 @@ export default function BranchMap({
 
         {/* ── Main timeline + merge nodes — dims when a merged PR is hovered ── */}
         <g style={{ opacity: hoveredPR !== null ? 0.2 : 1, transition: 'opacity 0.15s' }}>
-          <line x1={LEFT_PAD} y1={mainY} x2={mainEndX} y2={mainY} stroke="#1a1a1a" strokeWidth={1.5} />
-          <line x1={mainEndX} y1={mainY} x2={mainEndX + 80} y2={mainY}
-            stroke="#1a1a1a" strokeWidth={1.5} strokeDasharray="6 5" />
-          <text x={mainEndX + 90} y={mainY + 4} fontSize={12} fill="#1a1a1a" fontWeight={500}>
-            Main
-          </text>
-          {sortedNodes.map((m) => {
-            const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
-            const label = m.prNumber ? `PR #${m.prNumber}` : m.sha;
-            const title = (m.prTitle ?? '').slice(0, 22) + ((m.prTitle?.length ?? 0) > 22 ? '…' : '');
-            return (
-              <g key={m.fullSha}>
-                <rect x={x - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                  width={NODE_SIZE} height={NODE_SIZE}
-                  fill="white" stroke="#1a1a1a" strokeWidth={1.5} />
-                <text x={x} y={mainY + 20} textAnchor="middle" fontSize={11} fill="#6b7280">{label}</text>
-                <text x={x} y={mainY + 32} textAnchor="middle" fontSize={10} fill="#9ca3af">{title}</text>
-                <text x={x} y={mainY + 44} textAnchor="middle" fontSize={9} fill="#9ca3af">
-                  {fmtLabelDate(m.date)}
-                </text>
-              </g>
-            );
-          })}
+          <line x1={LEFT_PAD} y1={mainY} x2={mainEndX} y2={mainY} stroke="#1a1a1a" strokeWidth={1.5}
+            pathLength={1} className="draw-path-main" />
+
+          {/* Dashed extension, label, and ticks — fade in once the line is drawn */}
+          <g className="fade-in-info" style={{ '--delay': `${MAIN_DRAW_MS}ms` } as React.CSSProperties}>
+            <line x1={mainEndX} y1={mainY} x2={mainEndX + 80} y2={mainY}
+              stroke="#1a1a1a" strokeWidth={1.5} strokeDasharray="6 5" />
+            <text x={mainEndX + 90} y={mainY + 4} fontSize={12} fill="#1a1a1a" fontWeight={500}>
+              Main
+            </text>
+            {sortedNodes.map((m) => {
+              const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
+              const label = m.prNumber ? `PR #${m.prNumber}` : m.sha;
+              return (
+                <g key={m.fullSha}>
+                  <rect x={x - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
+                    width={NODE_SIZE} height={NODE_SIZE}
+                    fill="white" stroke="#1a1a1a" strokeWidth={1.5} />
+                  <text x={x} y={mainY + 20} textAnchor="middle" fontSize={11} fill="#6b7280">{label}</text>
+                  <text x={x} y={mainY + 32} textAnchor="middle" fontSize={9} fill="#9ca3af">
+                    {fmtLabelDate(m.date)}
+                  </text>
+                </g>
+              );
+            })}
+          </g>
         </g>
 
         {/* ── Merged PRs — interactive gray arcs ── */}
@@ -417,6 +462,7 @@ export default function BranchMap({
             forkX + CORNER_R + (arcSpan * (i + 1)) / (commitCount + 1)
           );
 
+          const prDelay = arcDelayMs.get(`pr-${pr.number}`) ?? 0;
           return (
             <g key={pr.number}
               opacity={opacity}
@@ -426,64 +472,70 @@ export default function BranchMap({
             >
               {/* Wide invisible stroke — extends hover target to ~12px around the arc line */}
               <path d={arcPath} fill="none" stroke="transparent" strokeWidth={20} />
-              {/* Visible arc */}
-              <path d={arcPath} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} style={{ pointerEvents: 'none' }} />
+              {/* Visible arc — draws in */}
+              <path d={arcPath} fill="none" stroke={strokeColor} strokeWidth={strokeWidth}
+                pathLength={1} className="draw-path-arc"
+                style={{ pointerEvents: 'none', '--delay': `${prDelay}ms` } as React.CSSProperties}
+              />
 
-              <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                width={NODE_SIZE} height={NODE_SIZE}
-                fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
-              <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                width={NODE_SIZE} height={NODE_SIZE}
-                fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+              {/* Arc info — fades in as arc draws */}
+              <g className="fade-in-info" style={{ '--delay': `${prDelay + INFO_OFFSET}ms` } as React.CSSProperties}>
+                <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
+                  width={NODE_SIZE} height={NODE_SIZE}
+                  fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
+                  width={NODE_SIZE} height={NODE_SIZE}
+                  fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
 
-              {/* Commit ticks — visible rect + larger transparent hit rect */}
-              {commitXs.map((cx, ci) => {
-                const isTickHovered = isHovered &&
-                  hoveredPRCommit?.pr.number === pr.number &&
-                  hoveredPRCommit?.commitIdx === ci;
-                const tickSize = isTickHovered ? NODE_SIZE + 3 : NODE_SIZE - 2;
-                const HIT = 20;
-                return (
-                  <g key={ci}>
-                    {/* Visible tick */}
-                    <rect
-                      x={cx - tickSize / 2} y={arcY - tickSize / 2}
-                      width={tickSize} height={tickSize}
-                      fill={isHovered ? '#6b7280' : '#9ca3af'}
-                      filter={isTickHovered ? 'url(#tick-shadow)' : undefined}
-                      style={{ pointerEvents: 'none' }}
-                    />
-                    {/* Invisible hit area */}
-                    <rect
-                      x={cx - HIT / 2} y={arcY - HIT / 2}
-                      width={HIT} height={HIT}
-                      fill="transparent"
-                      style={{ cursor: 'crosshair' }}
-                      onMouseEnter={(e) => {
-                        e.stopPropagation();
-                        setHoveredPRCommit({ x: cx, arcY, pr, commitIdx: ci, total: commitCount });
-                      }}
-                      onMouseLeave={(e) => {
-                        e.stopPropagation();
-                        setHoveredPRCommit(null);
-                      }}
-                    />
-                  </g>
-                );
-              })}
+                {/* Commit ticks — visible rect + larger transparent hit rect */}
+                {commitXs.map((cx, ci) => {
+                  const isTickHovered = isHovered &&
+                    hoveredPRCommit?.pr.number === pr.number &&
+                    hoveredPRCommit?.commitIdx === ci;
+                  const tickSize = isTickHovered ? NODE_SIZE + 3 : NODE_SIZE - 2;
+                  const HIT = 20;
+                  return (
+                    <g key={ci}>
+                      {/* Visible tick */}
+                      <rect
+                        x={cx - tickSize / 2} y={arcY - tickSize / 2}
+                        width={tickSize} height={tickSize}
+                        fill={isHovered ? '#6b7280' : '#9ca3af'}
+                        filter={isTickHovered ? 'url(#tick-shadow)' : undefined}
+                        style={{ pointerEvents: 'none' }}
+                      />
+                      {/* Invisible hit area */}
+                      <rect
+                        x={cx - HIT / 2} y={arcY - HIT / 2}
+                        width={HIT} height={HIT}
+                        fill="transparent"
+                        style={{ cursor: 'crosshair' }}
+                        onMouseEnter={(e) => {
+                          e.stopPropagation();
+                          setHoveredPRCommit({ x: cx, arcY, pr, commitIdx: ci, total: commitCount });
+                        }}
+                        onMouseLeave={(e) => {
+                          e.stopPropagation();
+                          setHoveredPRCommit(null);
+                        }}
+                      />
+                    </g>
+                  );
+                })}
 
-              {pr.authorAvatar ? (
-                <image href={pr.authorAvatar}
-                  x={midX - 10} y={arcY - 32}
-                  width={18} height={18}
-                  style={{ clipPath: 'circle(9px at 9px 9px)' }}
-                />
-              ) : (
-                <circle cx={midX} cy={arcY - 22} r={8} fill="#d1d5db" />
-              )}
-              <text x={midX + 14} y={arcY - 18} fontSize={11} fill={isHovered ? '#374151' : '#6b7280'}>
-                {pr.branchName.length > 20 ? pr.branchName.slice(0, 20) + '…' : pr.branchName}
-              </text>
+                {pr.authorAvatar ? (
+                  <image href={pr.authorAvatar}
+                    x={midX - 10} y={arcY - 32}
+                    width={18} height={18}
+                    style={{ clipPath: 'circle(9px at 9px 9px)' }}
+                  />
+                ) : (
+                  <circle cx={midX} cy={arcY - 22} r={8} fill="#d1d5db" />
+                )}
+                <text x={midX + 14} y={arcY - 18} fontSize={11} fill={isHovered ? '#374151' : '#6b7280'}>
+                  {pr.branchName.length > 20 ? pr.branchName.slice(0, 20) + '…' : pr.branchName}
+                </text>
+              </g>
             </g>
           );
         })}
@@ -517,6 +569,7 @@ export default function BranchMap({
           );
 
           const branchHref = `/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`;
+          const brDelay = arcDelayMs.get(`br-${b.name}`) ?? 0;
 
           // Hit rect covers the full branch visual area.
           // fill="rgba(0,0,0,0.001)" is invisible but "painted" — SVG's
@@ -537,70 +590,77 @@ export default function BranchMap({
               {/* Invisible painted hit area — must be first so visible elements paint on top */}
               <rect x={hitX} y={hitY} width={hitW} height={hitH} fill="rgba(0,0,0,0.001)" />
 
-              {/* Branch path */}
-              <path d={curvePath} fill="none" stroke={color} strokeWidth={1.5} />
-              {/* Dashed trailing edge */}
-              <line x1={tipX} y1={y} x2={tipX + TRAIL} y2={y}
-                stroke={color} strokeWidth={1.5} strokeDasharray="6 5" />
+              {/* Branch path — draws in */}
+              <path d={curvePath} fill="none" stroke={color} strokeWidth={1.5}
+                pathLength={1} className="draw-path-arc"
+                style={{ '--delay': `${brDelay}ms` } as React.CSSProperties}
+              />
 
-              {/* Fork hollow square on main */}
-              <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                width={NODE_SIZE} height={NODE_SIZE}
-                fill="white" stroke={color} strokeWidth={1.5} />
-              {/* Branch name label below main line */}
-              <text x={forkX} y={mainY + 20} textAnchor="middle" fontSize={10} fill="#9ca3af">
-                {b.name.length > 18 ? b.name.slice(0, 18) + '…' : b.name}
-              </text>
+              {/* Branch info — fades in as arc draws */}
+              <g className="fade-in-info" style={{ '--delay': `${brDelay + INFO_OFFSET}ms` } as React.CSSProperties}>
+                {/* Dashed trailing edge */}
+                <line x1={tipX} y1={y} x2={tipX + TRAIL} y2={y}
+                  stroke={color} strokeWidth={1.5} strokeDasharray="6 5" />
 
-              {/* Commit filled squares along branch */}
-              {commitXs.map((cx, ci) => (
-                <rect key={ci}
-                  x={cx - NODE_SIZE / 2} y={y - NODE_SIZE / 2}
+                {/* Fork hollow square on main */}
+                <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                   width={NODE_SIZE} height={NODE_SIZE}
-                  fill={isConflict ? '#dc2626' : isStale ? '#d97706' : '#9ca3af'}
-                  onMouseEnter={() => setTooltip({
-                    x: cx, y: y - 16,
-                    lines: [
-                      `Commit ${b.headSha?.slice(0, 7) ?? '-------'}`,
-                      `@${b.lastCommitAuthor}`,
-                      fmtTooltipDate(b.lastCommitDate),
-                    ],
-                  })}
-                  onMouseLeave={() => setTooltip(null)}
-                />
-              ))}
-
-              {/* Author avatar */}
-              {b.lastCommitAuthorAvatar ? (
-                <image href={b.lastCommitAuthorAvatar}
-                  x={forkX - 10} y={y - 36}
-                  width={20} height={20}
-                  style={{ clipPath: 'circle(10px at 10px 10px)' }}
-                />
-              ) : (
-                <circle cx={forkX} cy={y - 26} r={9} fill="#d1d5db" />
-              )}
-
-              {/* Branch name label */}
-              <text
-                x={forkX + 16} y={y - 22}
-                fontSize={12} fill={isHovered ? '#111' : color}
-                style={{ userSelect: 'none' }}
-              >
-                {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
-              </text>
-
-              {/* Status icons below main line */}
-              {b.status === 'stale' && (
-                <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#d97706">
-                  stale
+                  fill="white" stroke={color} strokeWidth={1.5} />
+                {/* Branch name label below main line */}
+                <text x={forkX} y={mainY + 20} textAnchor="middle" fontSize={10} fill="#9ca3af">
+                  {b.name.length > 18 ? b.name.slice(0, 18) + '…' : b.name}
                 </text>
-              )}
-              {b.status === 'conflict-risk' && (
-                <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#dc2626">
-                  conflict
+
+                {/* Commit filled squares along branch */}
+                {commitXs.map((cx, ci) => (
+                  <rect key={ci}
+                    x={cx - NODE_SIZE / 2} y={y - NODE_SIZE / 2}
+                    width={NODE_SIZE} height={NODE_SIZE}
+                    fill={isConflict ? '#dc2626' : isStale ? '#d97706' : '#9ca3af'}
+                    onMouseEnter={() => setTooltip({
+                      x: cx, y: y - 16,
+                      lines: [
+                        `Commit ${b.headSha?.slice(0, 7) ?? '-------'}`,
+                        `@${b.lastCommitAuthor}`,
+                        fmtTooltipDate(b.lastCommitDate),
+                      ],
+                    })}
+                    onMouseLeave={() => setTooltip(null)}
+                  />
+                ))}
+
+                {/* Author avatar */}
+                {b.lastCommitAuthorAvatar ? (
+                  <image href={b.lastCommitAuthorAvatar}
+                    x={forkX - 10} y={y - 36}
+                    width={20} height={20}
+                    style={{ clipPath: 'circle(10px at 10px 10px)' }}
+                  />
+                ) : (
+                  <circle cx={forkX} cy={y - 26} r={9} fill="#d1d5db" />
+                )}
+
+                {/* Branch name label */}
+                <text
+                  x={forkX + 16} y={y - 22}
+                  fontSize={12} fill={isHovered ? '#111' : color}
+                  style={{ userSelect: 'none' }}
+                >
+                  {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
                 </text>
-              )}
+
+                {/* Status icons below main line */}
+                {b.status === 'stale' && (
+                  <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#d97706">
+                    stale
+                  </text>
+                )}
+                {b.status === 'conflict-risk' && (
+                  <text x={forkX} y={mainY + 62} textAnchor="middle" fontSize={10} fill="#dc2626">
+                    conflict
+                  </text>
+                )}
+              </g>{/* end fade-in-info */}
             </g>
           );
         })}
@@ -714,38 +774,130 @@ export default function BranchMap({
 
     </div>
 
-      {/* Fixed bottom chrome: scrollbar + zoom controls — floats on page, no panel */}
-      <div className="fixed bottom-6 left-6 right-6 flex items-center gap-4 z-50">
-        <input
-          ref={barRangeRef}
-          type="range"
-          min={0}
-          max={Math.max(1, barScrollMax)}
-          value={barScrollLeft}
-          style={{ ['--thumb-w' as string]: `${thumbWidth}px` }}
-          onChange={(e) => {
-            if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value);
+      {/* Fixed bottom chrome: PR issues button + scrollbar + zoom */}
+      <div className="fixed bottom-6 left-6 right-6 flex flex-col gap-2 z-50">
+
+        {/* PR issues button — above scrollbar, right-aligned */}
+        {errorBranches.length > 0 && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => setErrorPanelOpen((o) => !o)}
+              className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 transition-colors ${
+                errorPanelOpen
+                  ? 'text-destructive border-destructive/40 bg-destructive/10'
+                  : 'text-destructive border-destructive/20 bg-destructive/5 hover:bg-destructive/10'
+              }`}
+            >
+              ⚠ {errorBranches.length} PR issue{errorBranches.length !== 1 ? 's' : ''}
+            </button>
+          </div>
+        )}
+
+        {/* Scrollbar + zoom row */}
+        <div
+          className="flex items-center gap-4"
+          style={{
+            opacity: hasMore || loadingMore ? 0 : 1,
+            transition: 'opacity 0.4s ease',
           }}
-          className="bottom-scroll-range flex-1"
-        />
-        <div className="flex items-center gap-2 shrink-0 bg-card border border-border rounded-full px-3 py-1">
+        >
+          <input
+            ref={barRangeRef}
+            type="range"
+            min={0}
+            max={Math.max(1, barScrollMax)}
+            value={barScrollLeft}
+            style={{ ['--thumb-w' as string]: `${thumbWidth}px` }}
+            onChange={(e) => {
+              if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value);
+            }}
+            className="bottom-scroll-range flex-1"
+          />
+          <div className="flex items-center gap-2 shrink-0 bg-card border border-border rounded-full px-3 py-1">
+            <button
+              onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+              title="Zoom out"
+            >
+              −
+            </button>
+            <span className="text-xs text-muted-foreground w-10 text-center tabular-nums select-none">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+              title="Zoom in"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* PR issues panel — slides in from right */}
+      <div
+        ref={errorPanelRef}
+        className={`fixed right-4 top-14 bottom-6 w-72 flex flex-col bg-card/90 backdrop-blur-sm rounded-2xl border border-border shadow-lg z-40 transition-all duration-300 ease-in-out ${
+          errorPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-[110%] opacity-0 pointer-events-none'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
+          <span className="text-sm font-medium text-foreground">PR issues</span>
           <button
-            onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
-            title="Zoom out"
+            onClick={() => setErrorPanelOpen(false)}
+            className="text-muted-foreground hover:text-foreground transition-colors"
           >
-            −
+            <X className="w-4 h-4" />
           </button>
-          <span className="text-xs text-muted-foreground w-10 text-center tabular-nums select-none">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
-            className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
-            title="Zoom in"
-          >
-            +
-          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-2">
+          {conflictBranches.length > 0 && (
+            <>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-2 pb-1">
+                Merge conflicts
+              </p>
+              {conflictBranches.map(b => (
+                <a
+                  key={b.name}
+                  href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`}
+                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <span className="mt-0.5 w-2 h-2 rounded-full bg-destructive shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
+                    </p>
+                  </div>
+                </a>
+              ))}
+            </>
+          )}
+
+          {staleBranches.length > 0 && (
+            <>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-3 pb-1">
+                Stale PRs
+              </p>
+              {staleBranches.map(b => (
+                <a
+                  key={b.name}
+                  href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`}
+                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <span className="mt-0.5 w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
+                    </p>
+                  </div>
+                </a>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>

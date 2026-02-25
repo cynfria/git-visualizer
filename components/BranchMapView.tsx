@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ArrowLeft, ChevronDown, Check, X } from 'lucide-react';
+import { ArrowLeft, ChevronDown, Check } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 import { Branch, MergeNode, MergedPR } from '@/types';
 import { useState, useRef, useEffect } from 'react';
@@ -16,14 +16,6 @@ const VIEW_LABELS: Record<ViewMode, string> = {
   creator: 'By creator',
 };
 
-function fmtRelativeDate(dateStr: string): string {
-  const diffDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
-  if (diffDays === 0) return 'today';
-  if (diffDays === 1) return 'yesterday';
-  if (diffDays < 7) return `${diffDays}d ago`;
-  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
-  return `${Math.floor(diffDays / 30)}mo ago`;
-}
 
 interface Props {
   branches: Branch[];
@@ -50,9 +42,7 @@ export default function BranchMapView({
 }: Props) {
   const [view, setView] = useState<ViewMode>('time');
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const [errorPanelOpen, setErrorPanelOpen] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const errorPanelRef = useRef<HTMLDivElement>(null);
   const [allBranches, setAllBranches] = useState<Branch[]>(branches);
   const nextPageRef = useRef(2);
   const loadingRef = useRef(false);
@@ -103,15 +93,6 @@ export default function BranchMapView({
     return () => document.removeEventListener('mousedown', handler);
   }, [dropdownOpen]);
 
-  useEffect(() => {
-    if (!errorPanelOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (!errorPanelRef.current?.contains(e.target as Node)) setErrorPanelOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [errorPanelOpen]);
-
   const errorBranches = allBranches.filter(
     (b) => b.status === 'conflict-risk' || b.status === 'stale'
   );
@@ -129,23 +110,10 @@ export default function BranchMapView({
           </Link>
         }
         center={
-          <h1 className="text-sm font-medium text-foreground">{owner}/{repo}</h1>
+          <h1 className="text-sm font-medium text-foreground" style={{ fontFamily: 'var(--font-space-grotesk), system-ui, sans-serif' }}>{owner}/{repo}</h1>
         }
         right={
           <>
-            {errorBranches.length > 0 && (
-              <button
-                onClick={() => setErrorPanelOpen((o) => !o)}
-                className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 transition-colors ${
-                  errorPanelOpen
-                    ? 'text-destructive border-destructive/40 bg-destructive/10'
-                    : 'text-destructive border-destructive/20 bg-destructive/5 hover:bg-destructive/10'
-                }`}
-              >
-                ⚠ {errorBranches.length} branch error{errorBranches.length !== 1 ? 's' : ''}
-              </button>
-            )}
-
             <div className="relative" ref={dropdownRef}>
               <button
                 onClick={() => setDropdownOpen((o) => !o)}
@@ -192,6 +160,8 @@ export default function BranchMapView({
             defaultBranch={defaultBranch}
             initialHasMore={initialHasMore}
             view={view}
+            conflictBranches={conflictBranches}
+            staleBranches={staleBranches}
           />
         </div>
       ) : (
@@ -206,71 +176,6 @@ export default function BranchMapView({
         </div>
       )}
 
-      {/* ── Error panel ── */}
-      <div
-        ref={errorPanelRef}
-        className={`absolute right-4 top-16 bottom-4 w-72 flex flex-col bg-card/90 backdrop-blur-sm rounded-2xl border border-border shadow-lg z-40 transition-all duration-300 ease-in-out ${
-          errorPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-[110%] opacity-0 pointer-events-none'
-        }`}
-      >
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
-          <span className="text-sm font-medium text-foreground">Branch errors</span>
-          <button
-            onClick={() => setErrorPanelOpen(false)}
-            className="text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto py-2">
-          {conflictBranches.length > 0 && (
-            <>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-2 pb-1">
-                Conflict risk
-              </p>
-              {conflictBranches.map(b => (
-                <a
-                  key={b.name}
-                  href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`}
-                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
-                >
-                  <span className="mt-0.5 w-2 h-2 rounded-full bg-destructive shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
-                    </p>
-                  </div>
-                </a>
-              ))}
-            </>
-          )}
-
-          {staleBranches.length > 0 && (
-            <>
-              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-3 pb-1">
-                Stale
-              </p>
-              {staleBranches.map(b => (
-                <a
-                  key={b.name}
-                  href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`}
-                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
-                >
-                  <span className="mt-0.5 w-2 h-2 rounded-full bg-amber-500 shrink-0" />
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
-                    <p className="text-[11px] text-muted-foreground">
-                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
-                    </p>
-                  </div>
-                </a>
-              ))}
-            </>
-          )}
-        </div>
-      </div>
     </div>
   );
 }
