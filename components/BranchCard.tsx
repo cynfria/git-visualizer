@@ -1,7 +1,4 @@
-'use client';
-
-import Link from 'next/link';
-import { Branch } from '@/types';
+import { Branch } from '../types';
 import StatusBadge from './StatusBadge';
 
 function formatDate(dateStr: string) {
@@ -11,25 +8,23 @@ function formatDate(dateStr: string) {
 
 export default function BranchCard({
   branch,
-  owner,
-  repo,
+  onClick,
 }: {
   branch: Branch;
-  owner: string;
-  repo: string;
+  onClick?: () => void;
 }) {
   const isError = branch.status === 'conflict-risk';
 
   return (
-    <Link
-      href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(branch.name)}`}
-      className={`block group rounded-xl border bg-white p-4 transition-shadow hover:shadow-md ${
-        isError ? 'border-red-200' : 'border-stone-200'
+    <button
+      onClick={onClick}
+      className={`block w-full text-left group rounded-xl border bg-stone-800 p-4 transition-all hover:bg-stone-750 hover:border-stone-600 ${
+        isError ? 'border-red-800' : 'border-stone-700'
       }`}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className={`font-mono text-sm font-medium truncate ${isError ? 'text-red-600' : 'text-stone-900'}`}>
+          <p className={`font-mono text-sm font-medium truncate ${isError ? 'text-red-400' : 'text-stone-100'}`}>
             {branch.name}
           </p>
           <p className="text-xs text-stone-500 mt-1">
@@ -44,17 +39,17 @@ export default function BranchCard({
           <img
             src={branch.lastCommitAuthorAvatar}
             alt={branch.lastCommitAuthor}
-            className="w-5 h-5 rounded-full bg-stone-200"
+            className="w-5 h-5 rounded-full bg-stone-700"
           />
         ) : (
-          <div className="w-5 h-5 rounded-full bg-stone-300" />
+          <div className="w-5 h-5 rounded-full bg-stone-600" />
         )}
         <span className="text-xs text-stone-500">{branch.lastCommitAuthor}</span>
       </div>
 
       {branch.mergeable === null && branch.name !== 'main' && (
-        <p className="text-xs text-stone-400 mt-2 italic">Conflict status computing…</p>
+        <p className="text-xs text-stone-600 mt-2 italic">Conflict status computing…</p>
       )}
-    </Link>
+    </button>
   );
 }

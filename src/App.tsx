@@ -1,8 +1,11 @@
 import { useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
 import BranchMap from '../components/BranchMap';
+import DiffViewer from '../components/DiffViewer';
 import FolderPickerModal from './FolderPickerModal';
 import type { Branch, MergeNode } from '../types';
+
+type View = 'landing' | 'map' | 'diff';
 
 function App() {
   const [repoPath, setRepoPath] = useState<string | null>(null);
@@ -12,6 +15,8 @@ function App() {
   const [defaultBranch, setDefaultBranch] = useState<string>('main');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<View>('landing');
+  const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
 
   async function loadRepo(path: string) {
     setLoading(true);
@@ -33,6 +38,7 @@ function App() {
       setBranches(branchList);
       setMergeNodes(nodes.nodes);
       setRepoPath(path);
+      setView('map');
     } catch (e) {
       console.error('Failed to load repo:', e);
       setError(e instanceof Error ? e.message : String(e));
@@ -56,20 +62,53 @@ function App() {
     }
   }
 
+  const errorBranches = branches.filter(
+    (b) => b.status === 'conflict-risk' || b.status === 'stale'
+  );
+
+  function handleBranchClick(branch: Branch) {
+    setSelectedBranch(branch);
+    setView('diff');
+  }
+
+  function handleBackToMap() {
+    setSelectedBranch(null);
+    setView('map');
+  }
+
+  function handleBackToLanding() {
+    setRepoPath(null);
+    setView('landing');
+  }
+
   return (
-    <div className="h-screen bg-stone-900 text-stone-100 flex flex-col">
-      {!repoPath ? (
+    <div className="h-screen bg-[#1c1917] text-stone-100 flex flex-col">
+      {view === 'landing' && (
         <RepoSelector onSelect={loadRepo} loading={loading} error={error} />
-      ) : (
+      )}
+
+      {view === 'map' && repoPath && (
         <>
-          <header className="px-4 py-2 border-b border-stone-700 flex items-center gap-4">
+          <header className="flex items-center justify-between px-8 py-5 border-b border-stone-800">
             <button
-              onClick={() => setRepoPath(null)}
-              className="text-stone-400 hover:text-white"
+              onClick={handleBackToLanding}
+              className="text-stone-500 hover:text-stone-200 transition-colors text-sm"
             >
               ← Back
             </button>
-            <h1 className="font-medium">{repoName}</h1>
+            <h1 className="text-base font-medium text-stone-100 absolute left-1/2 -translate-x-1/2">
+              {repoName}
+            </h1>
+            <div className="flex items-center gap-3">
+              {errorBranches.length > 0 && (
+                <span className="flex items-center gap-1.5 text-sm text-red-400 border border-red-800 rounded-full px-3 py-1 bg-red-950/50">
+                  ⚠ {errorBranches.length} branch error{errorBranches.length !== 1 ? 's' : ''}
+                </span>
+              )}
+              <span className="text-xs text-stone-500 border border-stone-700 rounded-full px-3 py-1 bg-stone-800">
+                View: By time
+              </span>
+            </div>
           </header>
           <div className="flex-1 overflow-hidden">
             <BranchMap
@@ -77,10 +116,46 @@ function App() {
               mergeNodes={mergeNodes}
               defaultBranch={defaultBranch}
               onLoadMore={loadMoreNodes}
+              onBranchClick={handleBranchClick}
             />
           </div>
         </>
       )}
+
+      {view === 'diff' && repoPath && selectedBranch && (
+        <DiffViewer
+          repoPath={repoPath}
+          branch={selectedBranch}
+          defaultBranch={defaultBranch}
+          onBack={handleBackToMap}
+        />
+      )}
+    </div>
+  );
+}
+
+// Decorative dot circle component
+function DotCircle({ size, left, top }: { size: number; left: string; top: string }) {
+  const r = size / 2;
+  const spacing = 9;
+  const dots: { x: number; y: number; opacity: number }[] = [];
+
+  for (let x = -r; x <= r; x += spacing) {
+    for (let y = -r; y <= r; y += spacing) {
+      const dist = Math.sqrt(x * x + y * y);
+      if (dist <= r) {
+        dots.push({ x, y, opacity: 1 - (dist / r) * 0.75 });
+      }
+    }
+  }
+
+  return (
+    <div className="absolute" style={{ left, top, transform: 'translate(-50%, -50%)' }}>
+      <svg width={size} height={size} viewBox={`${-r} ${-r} ${size} ${size}`}>
+        {dots.map((d, i) => (
+          <circle key={i} cx={d.x} cy={d.y} r={1.3} fill="#57534e" opacity={d.opacity * 0.6} />
+        ))}
+      </svg>
     </div>
   );
 }
@@ -96,6 +171,7 @@ function RepoSelector({
 }) {
   const [path, setPath] = useState('');
   const [showPicker, setShowPicker] = useState(false);
+  const [showInput, setShowInput] = useState(false);
 
   function handlePickerSelect(selectedPath: string) {
     setShowPicker(false);
@@ -103,40 +179,64 @@ function RepoSelector({
   }
 
   return (
-    <div className="flex-1 flex items-center justify-center">
-      <div className="bg-stone-800 p-8 rounded-lg w-96">
-        <h1 className="text-xl font-bold mb-4">Git Visualizer</h1>
-        <div className="flex gap-2 mb-4">
-          <input
-            type="text"
-            placeholder="/path/to/repo"
-            value={path}
-            onChange={(e) => setPath(e.target.value)}
-            className="flex-1 px-3 py-2 bg-stone-700 rounded text-stone-100 placeholder-stone-500"
-            onKeyDown={(e) => e.key === 'Enter' && path && onSelect(path)}
-          />
+    <main className="flex h-full overflow-hidden">
+      {/* Left decorative panel */}
+      <div className="w-[42%] relative flex-shrink-0 bg-[#151413] overflow-hidden">
+        <DotCircle size={320} left="38%" top="34%" />
+        <DotCircle size={280} left="52%" top="68%" />
+        <div
+          className="absolute text-[9px] text-stone-600 tracking-widest font-mono leading-4"
+          style={{ top: '44%', left: '58%', transform: 'rotate(90deg)', transformOrigin: 'left top' }}
+        >
+          59.9139°N<br />10.7522°E
+        </div>
+      </div>
+
+      {/* Right content panel */}
+      <div className="flex-1 flex flex-col justify-center px-16 bg-[#1c1917]">
+        <p className="text-sm text-stone-500 mb-3 tracking-wide">Git visualizer</p>
+        <h1 className="text-[2.5rem] font-bold leading-[1.15] text-stone-100 mb-14 max-w-xs">
+          See what your team is building, without reading a line of code.
+        </h1>
+
+        <p className="text-sm text-stone-400 mb-4">Get started</p>
+
+        <div className="flex flex-col gap-3 w-64">
           <button
             onClick={() => setShowPicker(true)}
-            className="px-3 py-2 bg-stone-700 hover:bg-stone-600 rounded text-stone-300 hover:text-white"
-            title="Browse folders"
+            className="px-6 py-3 border border-stone-100 text-stone-100 text-sm hover:bg-stone-100 hover:text-stone-900 transition-colors text-center"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
+            Browse for repository
           </button>
+
+          {!showInput ? (
+            <button
+              onClick={() => setShowInput(true)}
+              className="px-6 py-3 border border-stone-100 text-stone-100 text-sm hover:bg-stone-100 hover:text-stone-900 transition-colors text-center"
+            >
+              Enter repo path
+            </button>
+          ) : (
+            <form onSubmit={(e) => { e.preventDefault(); path && onSelect(path); }} className="flex flex-col gap-2">
+              <input
+                autoFocus
+                type="text"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder="/path/to/repository"
+                className="px-4 py-3 border border-stone-600 bg-transparent text-sm text-stone-100 placeholder-stone-600 outline-none focus:border-stone-400"
+              />
+              {error && <p className="text-xs text-red-400">{error}</p>}
+              <button
+                type="submit"
+                disabled={!path || loading}
+                className="px-6 py-3 bg-stone-100 text-stone-900 text-sm hover:bg-stone-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {loading ? 'Loading...' : 'Open repository →'}
+              </button>
+            </form>
+          )}
         </div>
-        {error && (
-          <div className="mb-4 p-2 bg-red-900/50 border border-red-700 rounded text-red-200 text-sm">
-            {error}
-          </div>
-        )}
-        <button
-          onClick={() => path && onSelect(path)}
-          disabled={!path || loading}
-          className="w-full py-2 bg-blue-600 rounded hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {loading ? 'Loading...' : 'Open Repository'}
-        </button>
       </div>
 
       {showPicker && (
@@ -145,7 +245,7 @@ function RepoSelector({
           onClose={() => setShowPicker(false)}
         />
       )}
-    </div>
+    </main>
   );
 }
 

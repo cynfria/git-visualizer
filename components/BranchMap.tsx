@@ -202,7 +202,7 @@ export default function BranchMap({
               y1={MAIN_Y}
               x2={mainEndX}
               y2={MAIN_Y}
-              stroke="#1a1a1a"
+              stroke="#a8a29e"
               strokeWidth={1.5}
             />
             <line
@@ -210,7 +210,7 @@ export default function BranchMap({
               y1={MAIN_Y}
               x2={mainEndX + 80}
               y2={MAIN_Y}
-              stroke="#1a1a1a"
+              stroke="#a8a29e"
               strokeWidth={1.5}
               strokeDasharray="6 5"
             />
@@ -218,7 +218,7 @@ export default function BranchMap({
               x={mainEndX + 90}
               y={MAIN_Y + 4}
               fontSize={12}
-              fill="#1a1a1a"
+              fill="#e7e5e4"
               fontWeight={500}
             >
               {defaultBranch}
@@ -236,8 +236,8 @@ export default function BranchMap({
                     y={MAIN_Y - NODE_SIZE / 2}
                     width={NODE_SIZE}
                     height={NODE_SIZE}
-                    fill="white"
-                    stroke="#1a1a1a"
+                    fill="#1c1917"
+                    stroke="#a8a29e"
                     strokeWidth={1.5}
                   />
                   <text
@@ -245,7 +245,7 @@ export default function BranchMap({
                     y={MAIN_Y + 20}
                     textAnchor="middle"
                     fontSize={11}
-                    fill="#6b7280"
+                    fill="#a8a29e"
                   >
                     {label}
                   </text>
@@ -254,7 +254,7 @@ export default function BranchMap({
                     y={MAIN_Y + 32}
                     textAnchor="middle"
                     fontSize={10}
-                    fill="#9ca3af"
+                    fill="#78716c"
                   >
                     {title}
                   </text>
@@ -263,7 +263,7 @@ export default function BranchMap({
                     y={MAIN_Y + 44}
                     textAnchor="middle"
                     fontSize={9}
-                    fill="#9ca3af"
+                    fill="#78716c"
                   >
                     {fmtLabelDate(m.date)}
                   </text>
@@ -278,7 +278,7 @@ export default function BranchMap({
               const forkX = branchForkX(b);
               const y = laneY(b);
               const isError = b.status === 'conflict-risk';
-              const color = isError ? '#dc2626' : '#6b7280';
+              const color = isError ? '#ef4444' : '#a8a29e';
               const isHovered = hoveredBranch === b.name;
 
               const TRAIL = 80;
@@ -320,7 +320,7 @@ export default function BranchMap({
                     y={MAIN_Y - NODE_SIZE / 2}
                     width={NODE_SIZE}
                     height={NODE_SIZE}
-                    fill="white"
+                    fill="#1c1917"
                     stroke={color}
                     strokeWidth={1.5}
                   />
@@ -333,7 +333,7 @@ export default function BranchMap({
                       y={y - NODE_SIZE / 2}
                       width={NODE_SIZE}
                       height={NODE_SIZE}
-                      fill={isError ? '#dc2626' : '#9ca3af'}
+                      fill={isError ? '#ef4444' : '#78716c'}
                       className="cursor-pointer"
                       onMouseEnter={() =>
                         setTooltip({
@@ -351,13 +351,13 @@ export default function BranchMap({
                   ))}
 
                   {/* Author initial circle */}
-                  <circle cx={forkX} cy={y - 26} r={9} fill="#d1d5db" />
+                  <circle cx={forkX} cy={y - 26} r={9} fill="#57534e" />
                   <text
                     x={forkX}
                     y={y - 22}
                     textAnchor="middle"
                     fontSize={10}
-                    fill="#6b7280"
+                    fill="#e7e5e4"
                     fontWeight={500}
                   >
                     {b.lastCommitAuthor?.charAt(0).toUpperCase() || '?'}
@@ -368,7 +368,7 @@ export default function BranchMap({
                     x={forkX + 16}
                     y={y - 22}
                     fontSize={12}
-                    fill={isHovered ? '#111' : color}
+                    fill={isHovered ? '#fafaf9' : color}
                     className="cursor-pointer select-none"
                     onMouseEnter={() => setHoveredBranch(b.name)}
                     onMouseLeave={() => setHoveredBranch(null)}
@@ -382,7 +382,7 @@ export default function BranchMap({
                     x={tipX + TRAIL + 10}
                     y={y + 4}
                     fontSize={10}
-                    fill="#9ca3af"
+                    fill="#78716c"
                   >
                     +{b.commitsAhead}
                   </text>
@@ -405,7 +405,7 @@ export default function BranchMap({
                         x={forkX - 8}
                         y={MAIN_Y + 62}
                         fontSize={13}
-                        fill="#dc2626"
+                        fill="#ef4444"
                       >
                         ⚠
                       </text>
@@ -425,8 +425,8 @@ export default function BranchMap({
                 width={210}
                 height={56}
                 rx={4}
-                fill="white"
-                stroke="#e5e7eb"
+                fill="#292524"
+                stroke="#44403c"
                 strokeWidth={1}
               />
               {tooltip.lines.map((line, i) => (
@@ -436,7 +436,7 @@ export default function BranchMap({
                   y={tooltip.y - 33 + i * 16}
                   fontSize={11}
                   fontFamily="monospace"
-                  fill={i === 0 ? '#dc2626' : '#6b7280'}
+                  fill={i === 0 ? '#ef4444' : '#a8a29e'}
                 >
                   {line}
                 </text>
@@ -454,19 +454,19 @@ export default function BranchMap({
       </div>
 
       {/* Zoom controls */}
-      <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-white border border-stone-200 rounded-lg shadow-sm px-2 py-1.5">
+      <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-stone-800 border border-stone-700 rounded-lg shadow-sm px-2 py-1.5">
         <button
           onClick={() =>
             setZoom((z) =>
               Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100)
             )
           }
-          className="w-6 h-6 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-50 rounded transition-colors text-base leading-none"
+          className="w-6 h-6 flex items-center justify-center text-stone-400 hover:text-stone-100 hover:bg-stone-700 rounded transition-colors text-base leading-none"
           title="Zoom out"
         >
           −
         </button>
-        <span className="text-xs text-stone-500 w-12 text-center tabular-nums">
+        <span className="text-xs text-stone-400 w-12 text-center tabular-nums">
           {Math.round(zoom * 100)}%
         </span>
         <button
@@ -475,7 +475,7 @@ export default function BranchMap({
               Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100)
             )
           }
-          className="w-6 h-6 flex items-center justify-center text-stone-600 hover:text-stone-900 hover:bg-stone-50 rounded transition-colors text-base leading-none"
+          className="w-6 h-6 flex items-center justify-center text-stone-400 hover:text-stone-100 hover:bg-stone-700 rounded transition-colors text-base leading-none"
           title="Zoom in"
         >
           +

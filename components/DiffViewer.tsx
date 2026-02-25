@@ -1,9 +1,6 @@
-'use client';
-
 import { useState, useEffect } from 'react';
-import { DiffResult, Commit, ComponentGroup } from '@/types';
-
-type ViewMode = 'commit' | 'component';
+import { invoke } from '@tauri-apps/api/core';
+import type { Branch, Commit } from '../types';
 
 function fmtDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -15,177 +12,146 @@ function fmtDate(dateStr: string) {
   });
 }
 
+interface DiffViewerProps {
+  repoPath: string;
+  branch: Branch;
+  defaultBranch: string;
+  onBack: () => void;
+}
+
 export default function DiffViewer({
-  owner,
-  repo,
+  repoPath,
   branch,
-  commits,
-  componentGroups,
-  token,
-}: {
-  owner: string;
-  repo: string;
-  branch: string;
-  commits: Commit[];
-  componentGroups: ComponentGroup[];
-  token?: string;
-}) {
-  const [viewMode, setViewMode] = useState<ViewMode>('commit');
-  const [diffResult, setDiffResult] = useState<DiffResult | null>(null);
+  defaultBranch,
+  onBack,
+}: DiffViewerProps) {
+  const [commits, setCommits] = useState<Commit[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    async function load() {
+    async function loadCommits() {
       setLoading(true);
-      setError(null);
       try {
-        const res = await fetch('/api/diff', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ owner, repo, branch, token }),
+        const result = await invoke<Commit[]>('get_branch_commits', {
+          repoPath,
+          branch: branch.name,
+          baseBranch: defaultBranch,
         });
-        const data: DiffResult = await res.json();
-        setDiffResult(data);
-        if (!data.success) {
-          setError(data.errorMessage ?? 'Diff failed');
-        }
+        setCommits(result);
       } catch (e) {
-        setError(e instanceof Error ? e.message : 'Request failed');
-      } finally {
-        setLoading(false);
+        // Command might not exist yet - use empty array
+        console.log('get_branch_commits not available:', e);
+        setCommits([]);
       }
+      setLoading(false);
     }
-    load();
-  }, [owner, repo, branch]);
+    loadCommits();
+  }, [repoPath, branch.name, defaultBranch]);
+
+  const isOutOfDate = branch.commitsBehind > 0;
 
   return (
-    <div className="flex gap-4 h-full min-h-0">
-      {/* ── Left: Changes panel ── */}
-      <div className="w-72 flex-shrink-0 bg-white rounded-2xl p-5 overflow-y-auto">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-base font-semibold text-stone-900">Changes</h2>
-          <button
-            onClick={() => setViewMode(viewMode === 'commit' ? 'component' : 'commit')}
-            className="text-xs text-stone-500 hover:text-stone-800 transition-colors"
-          >
-            View by: {viewMode === 'commit' ? 'Commit' : 'Component'}
-          </button>
+    <div className="h-full flex flex-col bg-[#1c1917]">
+      {/* Header */}
+      <header className="flex items-center justify-between px-8 py-5 flex-shrink-0 relative border-b border-stone-800">
+        <button
+          onClick={onBack}
+          className="text-stone-500 hover:text-stone-200 transition-colors text-sm"
+        >
+          ← Back
+        </button>
+        <h1 className="text-base font-medium text-stone-100 absolute left-1/2 -translate-x-1/2">
+          {branch.name}
+        </h1>
+        <div className="flex items-center gap-3">
+          {isOutOfDate && (
+            <span className="flex items-center gap-1.5 text-sm text-red-400">
+              ⚠ Branch out of date ({branch.commitsBehind} behind)
+            </span>
+          )}
         </div>
+      </header>
 
-        {viewMode === 'commit' ? (
-          <div className="space-y-0">
-            {commits.map((c, i) => (
-              <div key={c.sha}>
-                <div className="py-3">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="font-mono text-xs text-stone-400">{c.sha}</span>
-                    <span className="text-xs text-stone-400">{fmtDate(c.date)}</span>
+      {/* Main 3-column layout */}
+      <div className="flex-1 px-8 py-6 min-h-0 flex gap-4">
+        {/* Left: Changes panel */}
+        <div className="w-72 flex-shrink-0 bg-stone-800 rounded-2xl p-5 overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-stone-100">Changes</h2>
+            <span className="text-xs text-stone-500">
+              +{branch.commitsAhead} commits
+            </span>
+          </div>
+
+          {loading ? (
+            <div className="flex items-center gap-2 text-stone-500">
+              <div className="w-4 h-4 border-2 border-stone-600 border-t-stone-400 rounded-full animate-spin" />
+              <span className="text-sm">Loading commits...</span>
+            </div>
+          ) : commits.length > 0 ? (
+            <div className="space-y-0">
+              {commits.map((c, i) => (
+                <div key={c.sha}>
+                  <div className="py-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-xs text-stone-500">{c.sha.slice(0, 7)}</span>
+                      <span className="text-xs text-stone-600">{fmtDate(c.date)}</span>
+                    </div>
+                    <p className="text-sm text-stone-400 leading-snug">{c.message}</p>
+                    <p className="text-xs text-stone-600 mt-1">@{c.author}</p>
                   </div>
-                  <p className="text-sm text-stone-500 leading-snug">{c.message}</p>
-                  <p className="text-xs text-stone-400 mt-1">@{c.author}</p>
+                  {i < commits.length - 1 && <div className="border-t border-stone-700" />}
                 </div>
-                {i < commits.length - 1 && <div className="border-t border-stone-100" />}
-              </div>
-            ))}
-            {commits.length === 0 && (
-              <p className="text-xs text-stone-400 italic">No commits found</p>
-            )}
-          </div>
-        ) : (
-          <div className="space-y-0">
-            {componentGroups.map((g, i) => (
-              <div key={g.folder}>
-                <div className="py-3">
-                  <p className="text-sm font-medium text-stone-800 mb-1">{g.label}</p>
-                  {g.additions > 0 && (
-                    <p className="text-xs text-emerald-600">+ {g.additions} additions</p>
-                  )}
-                  {g.deletions > 0 && (
-                    <p className="text-xs text-red-500">- {g.deletions} deletions</p>
-                  )}
-                </div>
-                {i < componentGroups.length - 1 && <div className="border-t border-stone-100" />}
-              </div>
-            ))}
-            {componentGroups.length === 0 && (
-              <p className="text-xs text-stone-400 italic">No changed files found</p>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* ── Center: Main screenshot ── */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-stone-600 mb-3">Main</p>
-        <div className="rounded-2xl overflow-hidden bg-white shadow-sm border border-stone-100 h-[calc(100%-2rem)]">
-          {loading ? (
-            <ScreenshotSkeleton label="Building main…" />
-          ) : diffResult?.mainScreenshot ? (
-            <img
-              src={`data:image/png;base64,${diffResult.mainScreenshot}`}
-              alt="Main branch screenshot"
-              className="w-full object-cover object-top"
-            />
+              ))}
+            </div>
           ) : (
-            <ScreenshotError log={diffResult?.buildLog} />
+            <div className="space-y-3">
+              {/* Show branch info when commits aren't available */}
+              <div className="py-3 border-b border-stone-700">
+                <p className="text-sm text-stone-400">Latest commit</p>
+                <p className="font-mono text-xs text-stone-500 mt-1">{branch.headSha?.slice(0, 7) || '---'}</p>
+                <p className="text-xs text-stone-600 mt-1">@{branch.lastCommitAuthor}</p>
+                <p className="text-xs text-stone-600">{fmtDate(branch.lastCommitDate)}</p>
+              </div>
+              <p className="text-xs text-stone-600 italic">
+                Detailed commit list requires additional backend setup
+              </p>
+            </div>
           )}
         </div>
-      </div>
 
-      {/* ── Right: Branch screenshot ── */}
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-stone-600 mb-3">{branch}</p>
-        <div className="rounded-2xl overflow-hidden bg-white shadow-sm border border-stone-100 h-[calc(100%-2rem)]">
-          {loading ? (
-            <ScreenshotSkeleton label={`Building ${branch}…`} />
-          ) : diffResult?.branchScreenshot ? (
-            <img
-              src={`data:image/png;base64,${diffResult.branchScreenshot}`}
-              alt={`${branch} screenshot`}
-              className="w-full object-cover object-top"
-            />
-          ) : (
-            <ScreenshotError log={diffResult?.buildLog} />
-          )}
+        {/* Center: Main branch preview */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <p className="text-sm font-medium text-stone-500 mb-3">{defaultBranch}</p>
+          <div className="flex-1 rounded-2xl overflow-hidden bg-stone-800 border border-stone-700 flex items-center justify-center">
+            <div className="text-center p-8">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-stone-700 flex items-center justify-center">
+                <svg className="w-8 h-8 text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-sm text-stone-500">Visual preview</p>
+              <p className="text-xs text-stone-600 mt-1">Coming soon</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Branch preview */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <p className="text-sm font-medium text-stone-500 mb-3">{branch.name}</p>
+          <div className="flex-1 rounded-2xl overflow-hidden bg-stone-800 border border-stone-700 flex items-center justify-center">
+            <div className="text-center p-8">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-stone-700 flex items-center justify-center">
+                <svg className="w-8 h-8 text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-sm text-stone-500">Visual preview</p>
+              <p className="text-xs text-stone-600 mt-1">Coming soon</p>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-function ScreenshotSkeleton({ label }: { label: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center h-full min-h-64 text-stone-400 gap-3 p-8">
-      <div className="w-6 h-6 border-2 border-stone-300 border-t-stone-600 rounded-full animate-spin" />
-      <p className="text-xs">{label}</p>
-      <p className="text-xs text-stone-300 text-center">
-        First build may take up to 90 seconds
-      </p>
-    </div>
-  );
-}
-
-function ScreenshotError({ log }: { log?: string | null }) {
-  const [showLog, setShowLog] = useState(false);
-  return (
-    <div className="flex flex-col items-start p-6 h-full min-h-64 gap-3">
-      <p className="text-sm text-stone-500">Visual preview unavailable</p>
-      {log && (
-        <>
-          <button
-            onClick={() => setShowLog(!showLog)}
-            className="text-xs text-stone-400 underline"
-          >
-            {showLog ? 'Hide' : 'Show'} build log
-          </button>
-          {showLog && (
-            <pre className="text-xs text-stone-400 bg-stone-50 p-3 rounded overflow-auto max-h-48 w-full">
-              {log}
-            </pre>
-          )}
-        </>
-      )}
     </div>
   );
 }
