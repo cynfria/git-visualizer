@@ -54,7 +54,7 @@ export default function BranchMapView({
   );
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="h-screen flex flex-col bg-background">
       <header className="relative flex items-center justify-between px-8 py-4 border-b border-border/50">
         <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
           <ArrowLeft className="w-4 h-4" />
@@ -104,7 +104,7 @@ export default function BranchMapView({
           </div>
         </div>
       ) : view === 'time' ? (
-        <div className="px-8 pt-4 pb-16">
+        <div className="flex-1 min-h-0 px-8 pt-4 pb-12">
           <BranchMap
             branches={branches}
             mergeNodes={mergeNodes}
@@ -117,7 +117,7 @@ export default function BranchMapView({
           />
         </div>
       ) : (
-        <div className="px-8 pt-6 pb-16">
+        <div className="flex-1 min-h-0 px-8 pt-6 pb-16 overflow-y-auto">
           <BranchGroupView
             view={view}
             branches={branches}

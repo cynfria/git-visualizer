@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { ArrowLeft, TriangleAlert } from 'lucide-react';
 import { fetchBranches, fetchBranchCommits, fetchChangedFiles } from '@/lib/github';
 import DiffViewer from '@/components/DiffViewer';
 import type { Commit, ComponentGroup } from '@/types';
@@ -30,34 +31,34 @@ export default async function DiffPage({ params }: Props) {
   const isOutOfDate = branchData?.commitsBehind && branchData.commitsBehind > 0;
 
   return (
-    <div className="min-h-screen bg-[#F5F5F3] flex flex-col">
-      {/* Header */}
-      <header className="flex items-center justify-between px-8 py-5 flex-shrink-0 relative">
+    <div className="h-screen flex flex-col bg-background">
+      <header className="relative flex items-center justify-between px-8 py-4 shrink-0 border-b border-border/50">
         <Link
           href={`/repo/${owner}/${repo}`}
-          className="text-stone-400 hover:text-stone-700 transition-colors text-sm"
+          className="text-muted-foreground hover:text-foreground transition-colors"
         >
-          ← Back
+          <ArrowLeft className="w-4 h-4" />
         </Link>
-        <h1 className="text-base font-medium text-stone-900 absolute left-1/2 -translate-x-1/2">
+        <h1 className="text-sm font-medium text-foreground absolute left-1/2 -translate-x-1/2">
           {owner}/{branch}
         </h1>
-        {isOutOfDate && (
-          <span className="flex items-center gap-1.5 text-sm text-red-600">
-            ⚠ Branch out of date
+        {isOutOfDate ? (
+          <span className="flex items-center gap-1.5 text-xs text-destructive">
+            <TriangleAlert className="w-3.5 h-3.5 shrink-0" />
+            Branch out of date
           </span>
+        ) : (
+          <div />
         )}
       </header>
 
-      {/* Main 3-column layout */}
-      <div className="flex-1 px-8 pb-8 min-h-0">
+      <div className="flex-1 min-h-0 px-6 py-6">
         <DiffViewer
           owner={owner}
           repo={repo}
           branch={branch}
           commits={commits}
           componentGroups={componentGroups}
-          token={token}
         />
       </div>
     </div>

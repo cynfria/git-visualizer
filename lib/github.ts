@@ -27,10 +27,12 @@ export async function fetchBranches(
   // Get repo info for default branch
   const repoRes = await fetch(`${GITHUB_API}/repos/${owner}/${repo}`, { headers });
   if (!repoRes.ok) {
-    if (repoRes.status === 404) throw new Error('Repository not found. It may be private or the URL is wrong.');
-    if (repoRes.status === 401) throw new Error('Invalid token. Check your GITHUB_PAT in .env.local.');
-    if (repoRes.status === 403) throw new Error('Access denied. If this is a private org repo, authorize your token for SSO at github.com → Settings → Developer settings → Personal access tokens.');
-    throw new Error(`Repo fetch failed: ${repoRes.status}`);
+    let ghMessage = '';
+    try { ghMessage = (await repoRes.json()).message ?? ''; } catch {}
+    if (repoRes.status === 404) throw new Error(`Repository not found (404)${ghMessage ? ': ' + ghMessage : ''}`);
+    if (repoRes.status === 401) throw new Error(`Invalid token (401)${ghMessage ? ': ' + ghMessage : ''}`);
+    if (repoRes.status === 403) throw new Error(`Access denied (403)${ghMessage ? ': ' + ghMessage : ''}`);
+    throw new Error(`GitHub error ${repoRes.status}${ghMessage ? ': ' + ghMessage : ''}`);
   }
   const contentType = repoRes.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) {

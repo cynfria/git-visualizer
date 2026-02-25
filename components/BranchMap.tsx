@@ -1,12 +1,10 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { Branch, MergeNode, MergedPR } from '@/types';
 import { useState, useRef, useEffect } from 'react';
 import { ViewMode } from './BranchMapView';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
-const MAIN_Y = 420;
 const LEFT_PAD = 60;
 const RIGHT_PAD = 160;
 const MIN_BRANCH_SPACING_X = 120; // min horizontal gap between branches
@@ -51,7 +49,6 @@ export default function BranchMap({
   initialHasMore: boolean;
   view?: ViewMode;
 }) {
-  const router = useRouter();
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
   const [hoveredPR, setHoveredPR] = useState<number | null>(null);
@@ -64,7 +61,23 @@ export default function BranchMap({
   const [hasMore, setHasMore] = useState(initialHasMore);
   const [loadingMore, setLoadingMore] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const zoomScrollAnchor = useRef<{ contentX: number; mouseX: number; oldZoom: number } | null>(null);
+
+  // Keep stable refs so the native click handler never has a stale closure
+  const ownerRef = useRef(owner);
+  const repoRef = useRef(repo);
+  ownerRef.current = owner;
+  repoRef.current = repo;
+
+  // Bottom chrome scrollbar state
+  const [barScrollLeft, setBarScrollLeft] = useState(0);
+  const [barScrollMax, setBarScrollMax] = useState(0);
+  const [thumbWidth, setThumbWidth] = useState(48);
+  const barRangeRef = useRef<HTMLInputElement>(null);
+
+  // Responsive height
+  const [containerHeight, setContainerHeight] = useState(540);
   // Refs so the async loop always reads current values without stale closure issues
   const pageRef = useRef(2);
   const hasMoreRef = useRef(initialHasMore);
@@ -149,6 +162,31 @@ export default function BranchMap({
     });
   }, [zoom]);
 
+  // Sync bottom chrome scrollbar + track container height for responsive layout
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const syncBar = () => {
+      const max = Math.max(0, el.scrollWidth - el.clientWidth);
+      setBarScrollLeft(el.scrollLeft);
+      setBarScrollMax(max);
+      if (el.clientHeight > 0) setContainerHeight(el.clientHeight);
+      const rangeEl = barRangeRef.current;
+      if (rangeEl && rangeEl.offsetWidth > 0) {
+        const ratio = el.scrollWidth > 0 ? el.clientWidth / el.scrollWidth : 1;
+        setThumbWidth(Math.max(24, Math.round(rangeEl.offsetWidth * ratio)));
+      }
+    };
+    el.addEventListener('scroll', syncBar, { passive: true });
+    const ro = new ResizeObserver(syncBar);
+    ro.observe(el);
+    syncBar();
+    return () => {
+      el.removeEventListener('scroll', syncBar);
+      ro.disconnect();
+    };
+  }, []);
+
   // Fetch real commit counts for loaded PRs (the list API doesn't include this field)
   useEffect(() => {
     if (mergedPRs.length === 0) return;
@@ -162,10 +200,28 @@ export default function BranchMap({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Native DOM click listener — bypasses React synthetic events entirely.
+  // Handles branch navigation; React synthetic events have proven unreliable here.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handler = (e: MouseEvent) => {
+      const branchEl = (e.target as Element).closest('[data-branch]');
+      if (!branchEl) return;
+      const name = branchEl.getAttribute('data-branch');
+      if (name) {
+        window.location.href = `/repo/${ownerRef.current}/${repoRef.current}/diff/${encodeURIComponent(name)}`;
+      }
+    };
+    svg.addEventListener('click', handler);
+    return () => svg.removeEventListener('click', handler);
+  }, []);
+
   // ── Separate active vs merged branches ──────────────────────────────────────
   const STATUS_PRIORITY = { 'conflict-risk': 0, stale: 1, fresh: 2, unknown: 3 };
+  const mergedBranchNames = new Set(mergedPRs.map(pr => pr.branchName));
   const activeBranches = branches
-    .filter(b => b.name !== defaultBranch && b.commitsAhead > 0)
+    .filter(b => b.name !== defaultBranch && !mergedBranchNames.has(b.name))
     .sort((a, b) => {
       if (view === 'status') {
         const diff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
@@ -201,7 +257,6 @@ export default function BranchMap({
   });
 
   const mainEndX = LEFT_PAD + Math.max(sortedNodes.length - 1, 0) * NODE_SPACING;
-  const svgWidth = mainEndX + RIGHT_PAD + 80;
 
   // Pre-compute time range of the merge nodes for extrapolation
   const firstNodeT = sortedNodes.length > 0 ? new Date(sortedNodes[0].date).getTime() : Date.now();
@@ -239,6 +294,19 @@ export default function BranchMap({
     return timeToX(b.lastCommitDate);
   }
 
+  // SVG width: extend past mainEndX if any branch tip falls further right
+  // (e.g. a fresh branch with no commits sits at today's date, past the last PR).
+  const maxBranchTipX = activeBranches.reduce((max, b) => {
+    const fx = branchForkX(b);
+    const tipX = Math.max(timeToX(b.lastCommitDate), fx + CORNER_R + 20);
+    return Math.max(max, tipX + 80);
+  }, mainEndX);
+  const svgWidth = maxBranchTipX + RIGHT_PAD + 80;
+
+  // Dynamic main Y: positions the main timeline proportional to available height.
+  // 120px reserved below for node labels; minimum 440 so all 5 lanes fit above.
+  const mainY = Math.max(440, containerHeight - 120);
+
   // ── Assign vertical lanes to avoid overlap ───────────────────────────────
   // Sort by fork X so nearby branches get different lanes
   const sortedByX = [...activeBranches].sort(
@@ -255,18 +323,22 @@ export default function BranchMap({
 
   function laneY(b: Branch): number {
     const lane = laneAssignments.get(b.name) ?? 0;
-    return MAIN_Y - LANE_HEIGHT * (lane + 1) - 40;
+    return mainY - LANE_HEIGHT * (lane + 1) - 40;
   }
 
   // Merged PRs use a lower set of lanes so they don't collide with active branches
   const MERGED_LANE_HEIGHT = 60;
   const MERGED_LANES = 4;
-  const svgHeight = MAIN_Y + 120;
+  const svgHeight = Math.max(mainY + 120, containerHeight);
 
   return (
-    <div className="relative">
-    <div ref={scrollRef} className="w-full overflow-x-auto branch-map-scroll">
+    <div className="h-full">
+    <div
+      ref={scrollRef}
+      className="w-full h-full overflow-x-auto overflow-y-hidden branch-map-scroll relative"
+    >
       <svg
+        ref={svgRef}
         width={svgWidth}
         height={svgHeight}
         style={{ minWidth: svgWidth, display: 'block' }}
@@ -279,10 +351,10 @@ export default function BranchMap({
 
         {/* ── Main timeline + merge nodes — dims when a merged PR is hovered ── */}
         <g style={{ opacity: hoveredPR !== null ? 0.2 : 1, transition: 'opacity 0.15s' }}>
-          <line x1={LEFT_PAD} y1={MAIN_Y} x2={mainEndX} y2={MAIN_Y} stroke="#1a1a1a" strokeWidth={1.5} />
-          <line x1={mainEndX} y1={MAIN_Y} x2={mainEndX + 80} y2={MAIN_Y}
+          <line x1={LEFT_PAD} y1={mainY} x2={mainEndX} y2={mainY} stroke="#1a1a1a" strokeWidth={1.5} />
+          <line x1={mainEndX} y1={mainY} x2={mainEndX + 80} y2={mainY}
             stroke="#1a1a1a" strokeWidth={1.5} strokeDasharray="6 5" />
-          <text x={mainEndX + 90} y={MAIN_Y + 4} fontSize={12} fill="#1a1a1a" fontWeight={500}>
+          <text x={mainEndX + 90} y={mainY + 4} fontSize={12} fill="#1a1a1a" fontWeight={500}>
             Main
           </text>
           {sortedNodes.map((m) => {
@@ -291,12 +363,12 @@ export default function BranchMap({
             const title = (m.prTitle ?? '').slice(0, 22) + ((m.prTitle?.length ?? 0) > 22 ? '…' : '');
             return (
               <g key={m.fullSha}>
-                <rect x={x - NODE_SIZE / 2} y={MAIN_Y - NODE_SIZE / 2}
+                <rect x={x - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                   width={NODE_SIZE} height={NODE_SIZE}
                   fill="white" stroke="#1a1a1a" strokeWidth={1.5} />
-                <text x={x} y={MAIN_Y + 20} textAnchor="middle" fontSize={11} fill="#6b7280">{label}</text>
-                <text x={x} y={MAIN_Y + 32} textAnchor="middle" fontSize={10} fill="#9ca3af">{title}</text>
-                <text x={x} y={MAIN_Y + 44} textAnchor="middle" fontSize={9} fill="#9ca3af">
+                <text x={x} y={mainY + 20} textAnchor="middle" fontSize={11} fill="#6b7280">{label}</text>
+                <text x={x} y={mainY + 32} textAnchor="middle" fontSize={10} fill="#9ca3af">{title}</text>
+                <text x={x} y={mainY + 44} textAnchor="middle" fontSize={9} fill="#9ca3af">
                   {fmtLabelDate(m.date)}
                 </text>
               </g>
@@ -309,7 +381,7 @@ export default function BranchMap({
           const forkX = timeToX(pr.createdAt);
           const mergeX = timeToX(pr.mergedAt);
           const lane = idx % MERGED_LANES;
-          const arcY = MAIN_Y - MERGED_LANE_HEIGHT * (lane + 1);
+          const arcY = mainY - MERGED_LANE_HEIGHT * (lane + 1);
           const shas = prCommits.get(pr.number);
           const commitCount = Math.min(shas?.length ?? pr.commitCount ?? 1, 12);
           const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
@@ -321,12 +393,12 @@ export default function BranchMap({
           const strokeWidth = isHovered ? 1.6 : 1.2;
 
           const arcPath = [
-            `M ${forkX} ${MAIN_Y}`,
+            `M ${forkX} ${mainY}`,
             `L ${forkX} ${arcY + CORNER_R}`,
             `Q ${forkX} ${arcY} ${forkX + CORNER_R} ${arcY}`,
             `L ${effectiveMergeX - CORNER_R} ${arcY}`,
             `Q ${effectiveMergeX} ${arcY} ${effectiveMergeX} ${arcY + CORNER_R}`,
-            `L ${effectiveMergeX} ${MAIN_Y}`,
+            `L ${effectiveMergeX} ${mainY}`,
           ].join(' ');
 
           const midX = (forkX + effectiveMergeX) / 2;
@@ -347,10 +419,10 @@ export default function BranchMap({
               {/* Visible arc */}
               <path d={arcPath} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} style={{ pointerEvents: 'none' }} />
 
-              <rect x={forkX - NODE_SIZE / 2} y={MAIN_Y - NODE_SIZE / 2}
+              <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                 width={NODE_SIZE} height={NODE_SIZE}
                 fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
-              <rect x={effectiveMergeX - NODE_SIZE / 2} y={MAIN_Y - NODE_SIZE / 2}
+              <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                 width={NODE_SIZE} height={NODE_SIZE}
                 fill="white" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
 
@@ -424,7 +496,7 @@ export default function BranchMap({
           const tipX = Math.max(lastCommitX, forkX + CORNER_R + 20);
 
           // Smooth rounded corner path from fork point up then right to tip
-          const curvePath = `M ${forkX} ${MAIN_Y} L ${forkX} ${y + CORNER_R} Q ${forkX} ${y} ${forkX + CORNER_R} ${y} L ${tipX} ${y}`;
+          const curvePath = `M ${forkX} ${mainY} L ${forkX} ${y + CORNER_R} Q ${forkX} ${y} ${forkX + CORNER_R} ${y} L ${tipX} ${y}`;
 
           // Commit nodes: evenly spaced between fork+corner and tip
           const commitCount = Math.min(b.commitsAhead, 4);
@@ -433,16 +505,35 @@ export default function BranchMap({
             forkX + CORNER_R + (spanWidth * (i + 1)) / (commitCount + 1)
           );
 
+          const branchHref = `/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`;
+
+          // Hit rect covers the full branch visual area.
+          // fill="rgba(0,0,0,0.001)" is invisible but "painted" — SVG's
+          // pointer-events default (visiblePainted) requires geometry to fire.
+          const hitX = forkX - 10;
+          const hitY = y - 52;
+          const hitW = Math.max(tipX + TRAIL + 100 - hitX, 120);
+          const hitH = 67; // y-52 down to y+15 covers avatar, name, arc line
+
           return (
-            <g key={b.name}>
+            <g
+              key={b.name}
+              style={{ cursor: 'pointer' }}
+              onClick={() => { window.location.href = branchHref; }}
+              onMouseEnter={() => setHoveredBranch(b.name)}
+              onMouseLeave={() => { setHoveredBranch(null); setTooltip(null); }}
+            >
+              {/* Invisible painted hit area — must be first so visible elements paint on top */}
+              <rect x={hitX} y={hitY} width={hitW} height={hitH} fill="rgba(0,0,0,0.001)" />
+
               {/* Branch path */}
               <path d={curvePath} fill="none" stroke={color} strokeWidth={1.5} />
-              {/* Dashed trailing edge — exactly 80px, no canvas-edge clamping */}
+              {/* Dashed trailing edge */}
               <line x1={tipX} y1={y} x2={tipX + TRAIL} y2={y}
                 stroke={color} strokeWidth={1.5} strokeDasharray="6 5" />
 
               {/* Fork hollow square on main */}
-              <rect x={forkX - NODE_SIZE / 2} y={MAIN_Y - NODE_SIZE / 2}
+              <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
                 width={NODE_SIZE} height={NODE_SIZE}
                 fill="white" stroke={color} strokeWidth={1.5} />
 
@@ -452,7 +543,6 @@ export default function BranchMap({
                   x={cx - NODE_SIZE / 2} y={y - NODE_SIZE / 2}
                   width={NODE_SIZE} height={NODE_SIZE}
                   fill={isError ? '#dc2626' : '#9ca3af'}
-                  className="cursor-pointer"
                   onMouseEnter={() => setTooltip({
                     x: cx, y: y - 16,
                     lines: [
@@ -470,7 +560,7 @@ export default function BranchMap({
                 <image href={b.lastCommitAuthorAvatar}
                   x={forkX - 10} y={y - 36}
                   width={20} height={20}
-                  style={{ clipPath: 'circle(10px at 10px 10px)', borderRadius: '50%' }}
+                  style={{ clipPath: 'circle(10px at 10px 10px)' }}
                 />
               ) : (
                 <circle cx={forkX} cy={y - 26} r={9} fill="#d1d5db" />
@@ -480,10 +570,7 @@ export default function BranchMap({
               <text
                 x={forkX + 16} y={y - 22}
                 fontSize={12} fill={isHovered ? '#111' : color}
-                className="cursor-pointer select-none"
-                onMouseEnter={() => setHoveredBranch(b.name)}
-                onMouseLeave={() => setHoveredBranch(null)}
-                onClick={() => router.push(`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`)}
+                style={{ userSelect: 'none' }}
               >
                 {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
               </text>
@@ -492,13 +579,13 @@ export default function BranchMap({
               {b.status === 'stale' && (
                 <g>
                   <title>Out of date — no commits in 14+ days</title>
-                  <text x={forkX - 8} y={MAIN_Y + 62} fontSize={13}>📅</text>
+                  <text x={forkX - 8} y={mainY + 62} fontSize={13}>📅</text>
                 </g>
               )}
               {b.status === 'conflict-risk' && (
                 <g>
                   <title>Conflict risk — branch cannot be merged cleanly</title>
-                  <text x={forkX - 8} y={MAIN_Y + 62} fontSize={13} fill="#dc2626">⚠</text>
+                  <text x={forkX - 8} y={mainY + 62} fontSize={13} fill="#dc2626">⚠</text>
                 </g>
               )}
             </g>
@@ -547,6 +634,58 @@ export default function BranchMap({
         )}
       </svg>
 
+      {/* ── Clickable HTML overlays (active branches) ── */}
+      {activeBranches.map((b) => {
+        const forkX = branchForkX(b);
+        const y = laneY(b);
+        const tipX = Math.max(timeToX(b.lastCommitDate), forkX + CORNER_R + 20);
+        return (
+          <a
+            key={b.name}
+            href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(b.name)}`}
+            onMouseEnter={() => setHoveredBranch(b.name)}
+            onMouseLeave={() => { setHoveredBranch(null); setTooltip(null); }}
+            style={{
+              position: 'absolute',
+              left: forkX - 10,
+              top: y - 52,
+              width: Math.max(tipX + 80 + 90 - (forkX - 10), 120),
+              height: 67,
+              cursor: 'pointer',
+              display: 'block',
+              zIndex: 10,
+            }}
+          />
+        );
+      })}
+
+      {/* ── Clickable HTML overlays (merged PRs) ── */}
+      {displayedMergedPRs.map((pr, idx) => {
+        const forkX = timeToX(pr.createdAt);
+        const mergeX = timeToX(pr.mergedAt);
+        const lane = idx % MERGED_LANES;
+        const arcY = mainY - MERGED_LANE_HEIGHT * (lane + 1);
+        const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
+        return (
+          <a
+            key={pr.number}
+            href={`/repo/${owner}/${repo}/diff/${encodeURIComponent(pr.branchName)}`}
+            onMouseEnter={() => setHoveredPR(pr.number)}
+            onMouseLeave={() => { setHoveredPR(null); setHoveredPRCommit(null); }}
+            style={{
+              position: 'absolute',
+              left: forkX - 10,
+              top: arcY - 40,
+              width: Math.max(effectiveMergeX - forkX + 20, 60),
+              height: mainY - arcY + 50,
+              cursor: 'pointer',
+              display: 'block',
+              zIndex: 10,
+            }}
+          />
+        );
+      })}
+
       {/* Loading indicator */}
       {loadingMore && (
         <div className="absolute left-4 top-1/2 -translate-y-1/2 flex items-center gap-2 bg-card border border-border rounded-full px-3 py-1.5 shadow-sm">
@@ -562,23 +701,39 @@ export default function BranchMap({
 
     </div>
 
-      {/* Zoom controls */}
-      <div className="absolute bottom-4 right-4 flex items-center gap-1 bg-card border border-border rounded-lg shadow-sm px-2 py-1.5">
-        <button
-          onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
-          className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
-          title="Zoom out"
-        >
-          −
-        </button>
-        <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">{Math.round(zoom * 100)}%</span>
-        <button
-          onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
-          className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
-          title="Zoom in"
-        >
-          +
-        </button>
+      {/* Fixed bottom chrome: scrollbar + zoom controls — floats on page, no panel */}
+      <div className="fixed bottom-6 left-6 right-6 flex items-center gap-4 z-50">
+        <input
+          ref={barRangeRef}
+          type="range"
+          min={0}
+          max={Math.max(1, barScrollMax)}
+          value={barScrollLeft}
+          style={{ ['--thumb-w' as string]: `${thumbWidth}px` }}
+          onChange={(e) => {
+            if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value);
+          }}
+          className="bottom-scroll-range flex-1"
+        />
+        <div className="flex items-center gap-2 shrink-0 bg-card border border-border rounded-full px-3 py-1">
+          <button
+            onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+            title="Zoom out"
+          >
+            −
+          </button>
+          <span className="text-xs text-muted-foreground w-10 text-center tabular-nums select-none">
+            {Math.round(zoom * 100)}%
+          </span>
+          <button
+            onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
+            className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+            title="Zoom in"
+          >
+            +
+          </button>
+        </div>
       </div>
     </div>
   );
