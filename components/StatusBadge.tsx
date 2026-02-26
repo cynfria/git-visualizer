@@ -1,21 +1,21 @@
-import { BranchStatus } from '@/types';
+import { BranchStatus } from '../types';
 
 const config: Record<BranchStatus, { label: string; className: string }> = {
   fresh: {
     label: 'Fresh',
-    className: 'bg-emerald-50 text-emerald-700 border border-emerald-200',
+    className: 'bg-emerald-950/50 text-emerald-400 border border-emerald-800',
   },
   stale: {
     label: 'Stale',
-    className: 'bg-amber-50 text-amber-700 border border-amber-200',
+    className: 'bg-amber-950/50 text-amber-400 border border-amber-800',
   },
   'conflict-risk': {
     label: 'Conflict Risk',
-    className: 'bg-red-50 text-red-600 border border-red-200',
+    className: 'bg-red-950/50 text-red-400 border border-red-800',
   },
   unknown: {
     label: 'Unknown',
-    className: 'bg-stone-100 text-stone-500 border border-stone-200',
+    className: 'bg-stone-800 text-stone-400 border border-stone-700',
   },
 };
 

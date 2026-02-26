@@ -1,9 +1,6 @@
-'use client';
-
-import { useState } from 'react';
-import { Commit, ComponentGroup } from '@/types';
-
-type PanelMode = 'component' | 'commit';
+import { useState, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
+import type { Branch, Commit } from '../types';
 
 function timeAgo(dateStr: string) {
   const s = (Date.now() - new Date(dateStr).getTime()) / 1000;
@@ -14,113 +11,146 @@ function timeAgo(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+interface DiffViewerProps {
+  repoPath: string;
+  branch: Branch;
+  defaultBranch: string;
+  onBack: () => void;
+}
+
 export default function DiffViewer({
+  repoPath,
   branch,
-  commits,
-  componentGroups,
-}: {
-  owner: string;
-  repo: string;
-  branch: string;
-  commits: Commit[];
-  componentGroups: ComponentGroup[];
-}) {
-  const [mode, setMode] = useState<PanelMode>('component');
+  defaultBranch,
+  onBack,
+}: DiffViewerProps) {
+  const [commits, setCommits] = useState<Commit[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function loadCommits() {
+      setLoading(true);
+      try {
+        const result = await invoke<Commit[]>('get_branch_commits', {
+          repoPath,
+          branch: branch.name,
+          baseBranch: defaultBranch,
+        });
+        setCommits(result);
+      } catch (e) {
+        // Command might not exist yet - use empty array
+        console.log('get_branch_commits not available:', e);
+        setCommits([]);
+      }
+      setLoading(false);
+    }
+    loadCommits();
+  }, [repoPath, branch.name, defaultBranch]);
+
+  const isOutOfDate = branch.commitsBehind > 0;
 
   return (
-    <div className="flex gap-4 h-full min-h-0">
-
-      {/* ── Left: Changes panel ────────────────────────────────────────────── */}
-      <div className="w-72 shrink-0 bg-card rounded-2xl border border-border/50 flex flex-col min-h-0">
-        {/* Panel header */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-4 shrink-0">
-          <h2 className="text-sm font-semibold text-foreground">Changes</h2>
-          <button
-            onClick={() => setMode(mode === 'component' ? 'commit' : 'component')}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            View by: {mode === 'component' ? 'Component' : 'Commit'}
-          </button>
-        </div>
-
-        {/* Panel body */}
-        <div className="flex-1 overflow-y-auto px-5 pb-5 min-h-0">
-          {mode === 'component' ? (
-            componentGroups.length > 0 ? (
-              componentGroups.map((g, i) => (
-                <div key={g.folder}>
-                  <div className="py-3">
-                    <p className="text-sm font-medium text-foreground mb-1.5">{g.label}</p>
-                    {g.files
-                      .filter((f) => f.status !== 'removed')
-                      .slice(0, 6)
-                      .map((f) => (
-                        <p key={f.filename} className="text-xs text-green-600 dark:text-green-400 leading-relaxed">
-                          + {f.filename.split('/').pop()}
-                        </p>
-                      ))}
-                    {g.files
-                      .filter((f) => f.status === 'removed')
-                      .slice(0, 3)
-                      .map((f) => (
-                        <p key={f.filename} className="text-xs text-destructive leading-relaxed">
-                          − {f.filename.split('/').pop()}
-                        </p>
-                      ))}
-                  </div>
-                  {i < componentGroups.length - 1 && (
-                    <div className="border-t border-border/50" />
-                  )}
-                </div>
-              ))
-            ) : (
-              <div className="h-full flex items-center justify-center">
-                <p className="text-xs text-muted-foreground">No changed files</p>
-              </div>
-            )
-          ) : (
-            commits.length > 0 ? (
-              commits.map((c, i) => (
-                <div key={c.sha}>
-                  <div className="py-3">
-                    <div className="flex items-center gap-2 mb-1">
-                      {c.authorAvatar ? (
-                        <img src={c.authorAvatar} alt={c.author} className="w-4 h-4 rounded-full shrink-0" />
-                      ) : (
-                        <div className="w-4 h-4 rounded-full bg-muted shrink-0" />
-                      )}
-                      <span className="text-xs text-muted-foreground truncate">{c.author}</span>
-                      <span className="text-xs text-muted-foreground ml-auto shrink-0">{timeAgo(c.date)}</span>
-                    </div>
-                    <p className="text-xs text-foreground leading-snug">{c.message}</p>
-                    <p className="text-[10px] text-muted-foreground font-mono mt-1">{c.sha}</p>
-                  </div>
-                  {i < commits.length - 1 && (
-                    <div className="border-t border-border/50" />
-                  )}
-                </div>
-              ))
-            ) : (
-              <div className="h-full flex items-center justify-center">
-                <p className="text-xs text-muted-foreground">No commits found</p>
-              </div>
-            )
+    <div className="h-full flex flex-col bg-[#1c1917]">
+      {/* Header */}
+      <header className="flex items-center justify-between px-8 py-5 flex-shrink-0 relative border-b border-stone-800">
+        <button
+          onClick={onBack}
+          className="text-stone-500 hover:text-stone-200 transition-colors text-sm"
+        >
+          ← Back
+        </button>
+        <h1 className="text-base font-medium text-stone-100 absolute left-1/2 -translate-x-1/2">
+          {branch.name}
+        </h1>
+        <div className="flex items-center gap-3">
+          {isOutOfDate && (
+            <span className="flex items-center gap-1.5 text-sm text-red-400">
+              ⚠ Branch out of date ({branch.commitsBehind} behind)
+            </span>
           )}
         </div>
-      </div>
+      </header>
 
-      {/* ── Center: Main ───────────────────────────────────────────────────── */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <p className="text-sm font-medium text-muted-foreground mb-3 shrink-0">Main</p>
-        <div className="flex-1 rounded-2xl border border-border/50 bg-muted/40 min-h-0" />
-      </div>
+      {/* Main 3-column layout */}
+      <div className="flex-1 px-8 py-6 min-h-0 flex gap-4">
+        {/* Left: Changes panel */}
+        <div className="w-72 flex-shrink-0 bg-stone-800 rounded-2xl p-5 overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-base font-semibold text-stone-100">Changes</h2>
+            <span className="text-xs text-stone-500">
+              +{branch.commitsAhead} commits
+            </span>
+          </div>
 
-      {/* ── Right: Branch ──────────────────────────────────────────────────── */}
-      <div className="flex-1 min-w-0 flex flex-col min-h-0">
-        <p className="text-sm font-medium text-muted-foreground mb-3 shrink-0">Branch</p>
-        <div className="flex-1 rounded-2xl border border-border/50 bg-muted/40 min-h-0" />
-      </div>
+          {loading ? (
+            <div className="flex items-center gap-2 text-stone-500">
+              <div className="w-4 h-4 border-2 border-stone-600 border-t-stone-400 rounded-full animate-spin" />
+              <span className="text-sm">Loading commits...</span>
+            </div>
+          ) : commits.length > 0 ? (
+            <div className="space-y-0">
+              {commits.map((c, i) => (
+                <div key={c.sha}>
+                  <div className="py-3">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="font-mono text-xs text-stone-500">{c.sha.slice(0, 7)}</span>
+                      <span className="text-xs text-stone-600">{fmtDate(c.date)}</span>
+                    </div>
+                    <p className="text-sm text-stone-400 leading-snug">{c.message}</p>
+                    <p className="text-xs text-stone-600 mt-1">@{c.author}</p>
+                  </div>
+                  {i < commits.length - 1 && <div className="border-t border-stone-700" />}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Show branch info when commits aren't available */}
+              <div className="py-3 border-b border-stone-700">
+                <p className="text-sm text-stone-400">Latest commit</p>
+                <p className="font-mono text-xs text-stone-500 mt-1">{branch.headSha?.slice(0, 7) || '---'}</p>
+                <p className="text-xs text-stone-600 mt-1">@{branch.lastCommitAuthor}</p>
+                <p className="text-xs text-stone-600">{fmtDate(branch.lastCommitDate)}</p>
+              </div>
+              <p className="text-xs text-stone-600 italic">
+                Detailed commit list requires additional backend setup
+              </p>
+            </div>
+          )}
+        </div>
 
+        {/* Center: Main branch preview */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <p className="text-sm font-medium text-stone-500 mb-3">{defaultBranch}</p>
+          <div className="flex-1 rounded-2xl overflow-hidden bg-stone-800 border border-stone-700 flex items-center justify-center">
+            <div className="text-center p-8">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-stone-700 flex items-center justify-center">
+                <svg className="w-8 h-8 text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-sm text-stone-500">Visual preview</p>
+              <p className="text-xs text-stone-600 mt-1">Coming soon</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Branch preview */}
+        <div className="flex-1 min-w-0 flex flex-col">
+          <p className="text-sm font-medium text-stone-500 mb-3">{branch.name}</p>
+          <div className="flex-1 rounded-2xl overflow-hidden bg-stone-800 border border-stone-700 flex items-center justify-center">
+            <div className="text-center p-8">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-stone-700 flex items-center justify-center">
+                <svg className="w-8 h-8 text-stone-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <p className="text-sm text-stone-500">Visual preview</p>
+              <p className="text-xs text-stone-600 mt-1">Coming soon</p>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

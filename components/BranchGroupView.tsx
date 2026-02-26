@@ -1,7 +1,4 @@
-'use client';
-
-import { useRouter } from 'next/navigation';
-import { Branch, BranchStatus } from '@/types';
+import { Branch, BranchStatus } from '../types';
 import { ViewMode } from './BranchMapView';
 
 function timeAgo(dateStr: string) {
@@ -15,19 +12,16 @@ function timeAgo(dateStr: string) {
 
 function BranchCard({
   branch,
-  owner,
-  repo,
   accentColor,
+  onClick,
 }: {
   branch: Branch;
-  owner: string;
-  repo: string;
   accentColor: string;
+  onClick?: () => void;
 }) {
-  const router = useRouter();
   return (
     <div
-      onClick={() => router.push(`/repo/${owner}/${repo}/diff/${encodeURIComponent(branch.name)}`)}
+      onClick={onClick}
       className="group rounded-xl border border-border bg-card p-4 flex flex-col gap-3 cursor-pointer hover:shadow-sm hover:border-border/80 transition-all"
     >
       <div className="flex items-start justify-between gap-2">
@@ -48,7 +42,11 @@ function BranchCard({
             className="w-5 h-5 rounded-full shrink-0"
           />
         ) : (
-          <div className="w-5 h-5 rounded-full bg-muted shrink-0" />
+          <div className="w-5 h-5 rounded-full bg-muted flex items-center justify-center shrink-0">
+            <span className="text-[10px] text-muted-foreground font-medium">
+              {branch.lastCommitAuthor?.charAt(0).toUpperCase() || '?'}
+            </span>
+          </div>
         )}
         <span className="text-xs text-muted-foreground truncate">{branch.lastCommitAuthor}</span>
         <span className="text-xs text-muted-foreground ml-auto shrink-0">{timeAgo(branch.lastCommitDate)}</span>
@@ -57,10 +55,10 @@ function BranchCard({
       {(branch.commitsAhead > 0 || branch.commitsBehind > 0) && (
         <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
           {branch.commitsAhead > 0 && (
-            <span>↑ {branch.commitsAhead} ahead</span>
+            <span>+{branch.commitsAhead} ahead</span>
           )}
           {branch.commitsBehind > 0 && (
-            <span>↓ {branch.commitsBehind} behind</span>
+            <span>-{branch.commitsBehind} behind</span>
           )}
         </div>
       )}
@@ -80,36 +78,34 @@ const STATUS_CONFIG: {
   {
     status: 'conflict-risk',
     label: 'Conflict risk',
-    color: '#dc2626',
-    bg: 'bg-red-50 dark:bg-red-900/10',
+    color: '#ef4444',
+    bg: 'bg-red-500/10',
     description: 'Cannot be cleanly merged',
   },
   {
     status: 'stale',
     label: 'Stale',
-    color: '#d97706',
-    bg: 'bg-amber-50 dark:bg-amber-900/10',
+    color: '#f59e0b',
+    bg: 'bg-amber-500/10',
     description: 'No commits in 14+ days',
   },
   {
     status: 'fresh',
     label: 'Fresh',
-    color: '#16a34a',
-    bg: 'bg-green-50 dark:bg-green-900/10',
+    color: '#22c55e',
+    bg: 'bg-green-500/10',
     description: 'Recently active',
   },
 ];
 
-export function StatusView({
+function StatusView({
   branches,
-  owner,
-  repo,
   defaultBranch,
+  onBranchClick,
 }: {
   branches: Branch[];
-  owner: string;
-  repo: string;
   defaultBranch: string;
+  onBranchClick?: (branch: Branch) => void;
 }) {
   const active = branches.filter(b => b.name !== defaultBranch && b.commitsAhead > 0);
 
@@ -134,7 +130,12 @@ export function StatusView({
                 </div>
               ) : (
                 group.map(b => (
-                  <BranchCard key={b.name} branch={b} owner={owner} repo={repo} accentColor={color} />
+                  <BranchCard
+                    key={b.name}
+                    branch={b}
+                    accentColor={color}
+                    onClick={() => onBranchClick?.(b)}
+                  />
                 ))
               )}
             </div>
@@ -147,16 +148,14 @@ export function StatusView({
 
 // ── By Creator ───────────────────────────────────────────────────────────────
 
-export function CreatorView({
+function CreatorView({
   branches,
-  owner,
-  repo,
   defaultBranch,
+  onBranchClick,
 }: {
   branches: Branch[];
-  owner: string;
-  repo: string;
   defaultBranch: string;
+  onBranchClick?: (branch: Branch) => void;
 }) {
   const active = branches.filter(b => b.name !== defaultBranch && b.commitsAhead > 0);
 
@@ -171,10 +170,10 @@ export function CreatorView({
   }
 
   const STATUS_COLORS: Record<BranchStatus, string> = {
-    'conflict-risk': '#dc2626',
-    stale: '#d97706',
-    fresh: '#16a34a',
-    unknown: '#6b7280',
+    'conflict-risk': '#ef4444',
+    stale: '#f59e0b',
+    fresh: '#22c55e',
+    unknown: '#78716c',
   };
 
   return (
@@ -188,7 +187,11 @@ export function CreatorView({
               {avatar ? (
                 <img src={avatar} alt={author} className="w-8 h-8 rounded-full shrink-0" />
               ) : (
-                <div className="w-8 h-8 rounded-full bg-muted shrink-0" />
+                <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center shrink-0">
+                  <span className="text-sm text-muted-foreground font-medium">
+                    {author.charAt(0).toUpperCase()}
+                  </span>
+                </div>
               )}
               <div>
                 <p className="text-sm font-medium text-foreground">{author}</p>
@@ -204,9 +207,8 @@ export function CreatorView({
                 <BranchCard
                   key={b.name}
                   branch={b}
-                  owner={owner}
-                  repo={repo}
                   accentColor={STATUS_COLORS[b.status]}
+                  onClick={() => onBranchClick?.(b)}
                 />
               ))}
             </div>
@@ -228,18 +230,16 @@ export function CreatorView({
 export default function BranchGroupView({
   view,
   branches,
-  owner,
-  repo,
   defaultBranch,
+  onBranchClick,
 }: {
   view: Exclude<ViewMode, 'time'>;
   branches: Branch[];
-  owner: string;
-  repo: string;
   defaultBranch: string;
+  onBranchClick?: (branch: Branch) => void;
 }) {
   if (view === 'status') {
-    return <StatusView branches={branches} owner={owner} repo={repo} defaultBranch={defaultBranch} />;
+    return <StatusView branches={branches} defaultBranch={defaultBranch} onBranchClick={onBranchClick} />;
   }
-  return <CreatorView branches={branches} owner={owner} repo={repo} defaultBranch={defaultBranch} />;
+  return <CreatorView branches={branches} defaultBranch={defaultBranch} onBranchClick={onBranchClick} />;
 }

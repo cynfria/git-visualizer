@@ -6,26 +6,24 @@ export interface Branch {
   commitsBehind: number;
   lastCommitDate: string;
   lastCommitAuthor: string;
-  lastCommitAuthorAvatar: string;
-  mergeable: boolean | null;
+  lastCommitAuthorAvatar?: string;
+  mergeable?: boolean | null;
   status: BranchStatus;
-  // For branch map positioning
+  headSha: string;
   divergedFromSha?: string;
-  divergedFromDate?: string; // date of the merge-base commit, used for X positioning
-  headSha?: string;
+  divergedFromDate?: string;
 }
 
 export interface Commit {
   sha: string;
   message: string;
   author: string;
-  authorAvatar: string;
   date: string;
 }
 
 export interface MergeNode {
-  sha: string;       // 7-char for display
-  fullSha: string;   // full SHA for diverge-point matching
+  sha: string;
+  fullSha: string;
   prNumber: number | null;
   prTitle: string | null;
   date: string;
@@ -37,20 +35,16 @@ export interface MergedPR {
   branchName: string;
   authorLogin: string;
   authorAvatar: string;
-  createdAt: string;  // approximate fork date
-  mergedAt: string;   // when it landed on main
+  createdAt: string;
+  mergedAt: string;
+  mergeCommitSha: string;
   commitCount: number;
 }
 
-export interface DiffResult {
-  success: boolean;
-  mainScreenshot: string | null;
-  branchScreenshot: string | null;
-  diffImage: string | null;
-  changedPixels: number | null;
-  totalPixels: number | null;
-  errorMessage: string | null;
-  buildLog: string | null;
+export interface GitHubInfo {
+  owner: string;
+  repo: string;
+  ghAvailable: boolean;
 }
 
 export interface ChangedFile {
