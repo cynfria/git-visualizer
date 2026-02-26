@@ -109,6 +109,66 @@ pub fn get_github_info(repo_path: &Path) -> Result<GitHubInfo, String> {
     })
 }
 
+/// Response type for PR commits
+#[derive(Debug, Deserialize)]
+struct GitHubCommit {
+    sha: String,
+}
+
+/// Fetch commit SHAs for multiple PRs in parallel.
+/// Returns a map of PR number to list of short SHAs.
+pub fn get_pr_commits(
+    owner: &str,
+    repo: &str,
+    pr_numbers: &[i64],
+) -> Result<std::collections::HashMap<i64, Vec<String>>, String> {
+    use std::collections::HashMap;
+    use std::thread;
+
+    let mut results = HashMap::new();
+
+    // Fetch commits for each PR (could be parallelized further with rayon if needed)
+    let handles: Vec<_> = pr_numbers
+        .iter()
+        .map(|&num| {
+            let owner = owner.to_string();
+            let repo = repo.to_string();
+            thread::spawn(move || {
+                let output = Command::new("gh")
+                    .args([
+                        "api",
+                        &format!("repos/{owner}/{repo}/pulls/{num}/commits?per_page=100"),
+                    ])
+                    .output();
+
+                match output {
+                    Ok(out) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        if let Ok(commits) = serde_json::from_str::<Vec<GitHubCommit>>(&stdout) {
+                            let shas: Vec<String> = commits
+                                .iter()
+                                .map(|c| c.sha[..7.min(c.sha.len())].to_string())
+                                .collect();
+                            Some((num, shas))
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            })
+        })
+        .collect();
+
+    for handle in handles {
+        if let Ok(Some((num, shas))) = handle.join() {
+            results.insert(num, shas);
+        }
+    }
+
+    Ok(results)
+}
+
 /// Fetch merged PRs from GitHub using the gh CLI.
 /// Returns PRs merged into the specified base branch.
 pub fn get_merged_prs(

@@ -1,5 +1,6 @@
+import React, { useState, useRef, useEffect } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { Branch, MergeNode, MergedPR } from '../types';
-import { useState, useRef, useEffect } from 'react';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LEFT_PAD = 60;
@@ -15,6 +16,7 @@ const MERGED_LANE_HEIGHT = 60;
 const MERGED_LANES = 4;
 
 type TooltipData = { x: number; y: number; lines: string[] };
+type PRCommitHover = { x: number; arcY: number; pr: MergedPR; commitIdx: number; sha?: string };
 
 function fmtTooltipDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
@@ -44,6 +46,8 @@ interface BranchMapProps {
   onBranchSelect?: (branch: Branch) => void;
   onBranchClick?: (branch: Branch) => void;
   onLoadMore?: () => void;
+  githubOwner?: string | null;
+  githubRepo?: string | null;
 }
 
 export default function BranchMap({
@@ -54,10 +58,14 @@ export default function BranchMap({
   selectedBranch,
   onBranchSelect,
   onBranchClick,
+  githubOwner,
+  githubRepo,
 }: BranchMapProps) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
   const [hoveredPR, setHoveredPR] = useState<number | null>(null);
+  const [hoveredPRCommit, setHoveredPRCommit] = useState<PRCommitHover | null>(null);
+  const [prCommits, setPrCommits] = useState<Map<number, string[]>>(new Map());
   const [zoom, setZoom] = useState(1);
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -144,6 +152,24 @@ export default function BranchMap({
     };
   }, []);
 
+  // Fetch real commit SHAs for merged PRs
+  useEffect(() => {
+    if (!githubOwner || !githubRepo || mergedPRs.length === 0) return;
+
+    const prNumbers = mergedPRs.map(pr => pr.number);
+    invoke<Record<number, string[]>>('get_pr_commits', {
+      owner: githubOwner,
+      repo: githubRepo,
+      prNumbers,
+    })
+      .then((data) => {
+        setPrCommits(new Map(Object.entries(data).map(([k, v]) => [parseInt(k), v])));
+      })
+      .catch(() => {
+        // Silently fail - tooltips will just not show SHAs
+      });
+  }, [githubOwner, githubRepo, mergedPRs]);
+
   // ── Separate active vs merged branches ──────────────────────────────────────
   const mergedBranchNames = new Set(mergedPRs.map(pr => pr.branchName));
   const activeBranches = branches
@@ -154,6 +180,19 @@ export default function BranchMap({
         new Date(a.lastCommitDate).getTime()
     )
     .slice(0, MAX_ACTIVE);
+
+  // ── Animation delays: sort all arcs newest → oldest, stagger after main line ─
+  const MAIN_DRAW_MS = 1400;
+  const STAGGER_MS = 70;
+  const INFO_OFFSET = 600; // ms after arc starts drawing before info fades in
+  const arcDelayMs = new Map<string, number>(
+    [
+      ...mergedPRs.map(pr => ({ key: `pr-${pr.number}`, date: pr.mergedAt })),
+      ...activeBranches.map(b => ({ key: `br-${b.name}`, date: b.lastCommitDate })),
+    ]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .map(({ key }, i) => [key, MAIN_DRAW_MS + i * STAGGER_MS] as [string, number])
+  );
 
   // ── Build a date → X mapping ─────────────────────────────────────────────
   const NODE_SPACING = Math.max(MIN_BRANCH_SPACING_X, Math.round(160 * zoom));
@@ -254,72 +293,78 @@ export default function BranchMap({
               y2={mainY}
               stroke="#a8a29e"
               strokeWidth={1.5}
+              pathLength={1}
+              className="draw-path-main"
             />
-            <line
-              x1={mainEndX}
-              y1={mainY}
-              x2={mainEndX + 80}
-              y2={mainY}
-              stroke="#a8a29e"
-              strokeWidth={1.5}
-              strokeDasharray="6 5"
-            />
-            <text
-              x={mainEndX + 90}
-              y={mainY + 4}
-              fontSize={12}
-              fill="#e7e5e4"
-              fontWeight={500}
-            >
-              {defaultBranch}
-            </text>
-            {sortedNodes.map((m) => {
-              const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
-              const label = m.prNumber ? `PR #${m.prNumber}` : m.sha;
-              const title =
-                (m.prTitle ?? '').slice(0, 22) +
-                ((m.prTitle?.length ?? 0) > 22 ? '…' : '');
-              return (
-                <g key={m.fullSha}>
-                  <rect
-                    x={x - NODE_SIZE / 2}
-                    y={mainY - NODE_SIZE / 2}
-                    width={NODE_SIZE}
-                    height={NODE_SIZE}
-                    fill="#1c1917"
-                    stroke="#a8a29e"
-                    strokeWidth={1.5}
-                  />
-                  <text
-                    x={x}
-                    y={mainY + 20}
-                    textAnchor="middle"
-                    fontSize={11}
-                    fill="#a8a29e"
-                  >
-                    {label}
-                  </text>
-                  <text
-                    x={x}
-                    y={mainY + 32}
-                    textAnchor="middle"
-                    fontSize={10}
-                    fill="#78716c"
-                  >
-                    {title}
-                  </text>
-                  <text
-                    x={x}
-                    y={mainY + 44}
-                    textAnchor="middle"
-                    fontSize={9}
-                    fill="#78716c"
-                  >
-                    {fmtLabelDate(m.date)}
-                  </text>
-                </g>
-              );
-            })}
+
+            {/* Dashed extension, label, and ticks — fade in once the line is drawn */}
+            <g className="fade-in-info" style={{ '--delay': `${MAIN_DRAW_MS}ms` } as React.CSSProperties}>
+              <line
+                x1={mainEndX}
+                y1={mainY}
+                x2={mainEndX + 80}
+                y2={mainY}
+                stroke="#a8a29e"
+                strokeWidth={1.5}
+                strokeDasharray="6 5"
+              />
+              <text
+                x={mainEndX + 90}
+                y={mainY + 4}
+                fontSize={12}
+                fill="#e7e5e4"
+                fontWeight={500}
+              >
+                {defaultBranch}
+              </text>
+              {sortedNodes.map((m) => {
+                const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
+                const label = m.prNumber ? `PR #${m.prNumber}` : m.sha;
+                const title =
+                  (m.prTitle ?? '').slice(0, 22) +
+                  ((m.prTitle?.length ?? 0) > 22 ? '…' : '');
+                return (
+                  <g key={m.fullSha}>
+                    <rect
+                      x={x - NODE_SIZE / 2}
+                      y={mainY - NODE_SIZE / 2}
+                      width={NODE_SIZE}
+                      height={NODE_SIZE}
+                      fill="#1c1917"
+                      stroke="#a8a29e"
+                      strokeWidth={1.5}
+                    />
+                    <text
+                      x={x}
+                      y={mainY + 20}
+                      textAnchor="middle"
+                      fontSize={11}
+                      fill="#a8a29e"
+                    >
+                      {label}
+                    </text>
+                    <text
+                      x={x}
+                      y={mainY + 32}
+                      textAnchor="middle"
+                      fontSize={10}
+                      fill="#78716c"
+                    >
+                      {title}
+                    </text>
+                    <text
+                      x={x}
+                      y={mainY + 44}
+                      textAnchor="middle"
+                      fontSize={9}
+                      fill="#78716c"
+                    >
+                      {fmtLabelDate(m.date)}
+                    </text>
+                  </g>
+                );
+              })}
+            </g>
           </g>
 
           {/* ── Merged PRs — interactive arcs ── */}
@@ -328,7 +373,8 @@ export default function BranchMap({
             const mergeX = timeToX(pr.mergedAt);
             const lane = idx % MERGED_LANES;
             const arcY = mainY - MERGED_LANE_HEIGHT * (lane + 1);
-            const commitCount = Math.min(pr.commitCount ?? 1, 12);
+            const shas = prCommits.get(pr.number);
+            const commitCount = Math.min(shas?.length ?? pr.commitCount ?? 1, 12);
             const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
 
             const isHovered = hoveredPR === pr.number;
@@ -352,55 +398,95 @@ export default function BranchMap({
               forkX + CORNER_R + (arcSpan * (i + 1)) / (commitCount + 1)
             );
 
+            const prDelay = arcDelayMs.get(`pr-${pr.number}`) ?? 0;
+
             return (
               <g
                 key={pr.number}
                 opacity={opacity}
                 style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
                 onMouseEnter={() => setHoveredPR(pr.number)}
-                onMouseLeave={() => setHoveredPR(null)}
+                onMouseLeave={() => { setHoveredPR(null); setHoveredPRCommit(null); }}
               >
                 {/* Wide invisible stroke for hover */}
                 <path d={arcPath} fill="none" stroke="transparent" strokeWidth={20} />
-                {/* Visible arc */}
-                <path d={arcPath} fill="none" stroke={strokeColor} strokeWidth={strokeWidth} style={{ pointerEvents: 'none' }} />
+                {/* Visible arc — draws in */}
+                <path
+                  d={arcPath}
+                  fill="none"
+                  stroke={strokeColor}
+                  strokeWidth={strokeWidth}
+                  pathLength={1}
+                  className="draw-path-arc"
+                  style={{ pointerEvents: 'none', '--delay': `${prDelay}ms` } as React.CSSProperties}
+                />
 
-                <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                  width={NODE_SIZE} height={NODE_SIZE}
-                  fill="#1c1917" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
-                <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                  width={NODE_SIZE} height={NODE_SIZE}
-                  fill="#1c1917" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                {/* Arc info — fades in as arc draws */}
+                <g className="fade-in-info" style={{ '--delay': `${prDelay + INFO_OFFSET}ms` } as React.CSSProperties}>
+                  <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
+                    width={NODE_SIZE} height={NODE_SIZE}
+                    fill="#1c1917" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                  <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
+                    width={NODE_SIZE} height={NODE_SIZE}
+                    fill="#1c1917" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
 
-                {/* Commit ticks */}
-                {commitXs.map((cx, ci) => (
-                  <rect
-                    key={ci}
-                    x={cx - (NODE_SIZE - 2) / 2}
-                    y={arcY - (NODE_SIZE - 2) / 2}
-                    width={NODE_SIZE - 2}
-                    height={NODE_SIZE - 2}
-                    fill={isHovered ? '#a8a29e' : '#78716c'}
-                    style={{ pointerEvents: 'none' }}
-                  />
-                ))}
+                  {/* Commit ticks — interactive with SHA tooltips */}
+                  {commitXs.map((cx, ci) => {
+                    const sha = shas?.[ci];
+                    const isTickHovered = isHovered &&
+                      hoveredPRCommit?.pr.number === pr.number &&
+                      hoveredPRCommit?.commitIdx === ci;
+                    const tickSize = isTickHovered ? NODE_SIZE + 3 : NODE_SIZE - 2;
+                    const HIT = 20;
+                    return (
+                      <g key={ci}>
+                        {/* Visible tick */}
+                        <rect
+                          x={cx - tickSize / 2}
+                          y={arcY - tickSize / 2}
+                          width={tickSize}
+                          height={tickSize}
+                          fill={isHovered ? '#a8a29e' : '#78716c'}
+                          style={{ pointerEvents: 'none', transition: 'all 0.1s' }}
+                        />
+                        {/* Invisible hit area */}
+                        <rect
+                          x={cx - HIT / 2}
+                          y={arcY - HIT / 2}
+                          width={HIT}
+                          height={HIT}
+                          fill="transparent"
+                          style={{ cursor: 'crosshair' }}
+                          onMouseEnter={(e) => {
+                            e.stopPropagation();
+                            setHoveredPRCommit({ x: cx, arcY, pr, commitIdx: ci, sha });
+                          }}
+                          onMouseLeave={(e) => {
+                            e.stopPropagation();
+                            setHoveredPRCommit(null);
+                          }}
+                        />
+                      </g>
+                    );
+                  })}
 
-                {/* Author avatar */}
-                {pr.authorAvatar ? (
-                  <image
-                    href={pr.authorAvatar}
-                    x={midX - 10}
-                    y={arcY - 32}
-                    width={18}
-                    height={18}
-                    style={{ clipPath: 'circle(9px at 9px 9px)' }}
-                  />
-                ) : (
-                  <circle cx={midX} cy={arcY - 22} r={8} fill="#57534e" />
-                )}
-                <text x={midX + 14} y={arcY - 18} fontSize={11} fill={isHovered ? '#e7e5e4' : '#a8a29e'}>
-                  {pr.branchName.length > 20 ? pr.branchName.slice(0, 20) + '…' : pr.branchName}
-                </text>
+                  {/* Author avatar */}
+                  {pr.authorAvatar ? (
+                    <image
+                      href={pr.authorAvatar}
+                      x={midX - 10}
+                      y={arcY - 32}
+                      width={18}
+                      height={18}
+                      style={{ clipPath: 'circle(9px at 9px 9px)' }}
+                    />
+                  ) : (
+                    <circle cx={midX} cy={arcY - 22} r={8} fill="#57534e" />
+                  )}
+                  <text x={midX + 14} y={arcY - 18} fontSize={11} fill={isHovered ? '#e7e5e4' : '#a8a29e'}>
+                    {pr.branchName.length > 20 ? pr.branchName.slice(0, 20) + '…' : pr.branchName}
+                  </text>
+                </g>
               </g>
             );
           })}
@@ -435,6 +521,8 @@ export default function BranchMap({
                 forkX + CORNER_R + (spanWidth * (i + 1)) / (commitCount + 1)
               );
 
+              const brDelay = arcDelayMs.get(`br-${b.name}`) ?? 0;
+
               return (
                 <g
                   key={b.name}
@@ -454,95 +542,102 @@ export default function BranchMap({
                       style={{ filter: 'blur(4px)' }}
                     />
                   )}
-                  {/* Branch path */}
+                  {/* Branch path — draws in */}
                   <path
                     d={curvePath}
                     fill="none"
                     stroke={color}
                     strokeWidth={strokeWidth}
-                  />
-                  {/* Dashed trailing edge */}
-                  <line
-                    x1={tipX}
-                    y1={y}
-                    x2={tipX + TRAIL}
-                    y2={y}
-                    stroke={color}
-                    strokeWidth={strokeWidth}
-                    strokeDasharray="6 5"
+                    pathLength={1}
+                    className="draw-path-arc"
+                    style={{ '--delay': `${brDelay}ms` } as React.CSSProperties}
                   />
 
-                  {/* Fork hollow square on main */}
-                  <rect
-                    x={forkX - NODE_SIZE / 2}
-                    y={mainY - NODE_SIZE / 2}
-                    width={NODE_SIZE}
-                    height={NODE_SIZE}
-                    fill={isSelected ? '#22d3ee' : '#1c1917'}
-                    stroke={color}
-                    strokeWidth={strokeWidth}
-                  />
+                  {/* Branch info — fades in as arc draws */}
+                  <g className="fade-in-info" style={{ '--delay': `${brDelay + INFO_OFFSET}ms` } as React.CSSProperties}>
+                    {/* Dashed trailing edge */}
+                    <line
+                      x1={tipX}
+                      y1={y}
+                      x2={tipX + TRAIL}
+                      y2={y}
+                      stroke={color}
+                      strokeWidth={strokeWidth}
+                      strokeDasharray="6 5"
+                    />
 
-                  {/* Commit filled squares along branch */}
-                  {commitXs.map((cx, ci) => (
+                    {/* Fork hollow square on main */}
                     <rect
-                      key={ci}
-                      x={cx - NODE_SIZE / 2}
-                      y={y - NODE_SIZE / 2}
+                      x={forkX - NODE_SIZE / 2}
+                      y={mainY - NODE_SIZE / 2}
                       width={NODE_SIZE}
                       height={NODE_SIZE}
-                      fill={isSelected ? '#22d3ee' : isError ? '#ef4444' : '#78716c'}
-                      onMouseEnter={() =>
-                        setTooltip({
-                          x: cx,
-                          y: y - 16,
-                          lines: [
-                            `Commit ${b.headSha?.slice(0, 7) ?? '-------'}`,
-                            `@${b.lastCommitAuthor}`,
-                            fmtTooltipDate(b.lastCommitDate),
-                          ],
-                        })
-                      }
-                      onMouseLeave={() => setTooltip(null)}
+                      fill={isSelected ? '#22d3ee' : '#1c1917'}
+                      stroke={color}
+                      strokeWidth={strokeWidth}
                     />
-                  ))}
 
-                  {/* Author initial circle */}
-                  <circle cx={forkX} cy={y - 26} r={9} fill={isSelected ? '#0891b2' : '#57534e'} />
-                  <text
-                    x={forkX}
-                    y={y - 22}
-                    textAnchor="middle"
-                    fontSize={10}
-                    fill={isSelected ? '#ecfeff' : '#e7e5e4'}
-                    fontWeight={500}
-                  >
-                    {b.lastCommitAuthor?.charAt(0).toUpperCase() || '?'}
-                  </text>
+                    {/* Commit filled squares along branch */}
+                    {commitXs.map((cx, ci) => (
+                      <rect
+                        key={ci}
+                        x={cx - NODE_SIZE / 2}
+                        y={y - NODE_SIZE / 2}
+                        width={NODE_SIZE}
+                        height={NODE_SIZE}
+                        fill={isSelected ? '#22d3ee' : isError ? '#ef4444' : '#78716c'}
+                        onMouseEnter={() =>
+                          setTooltip({
+                            x: cx,
+                            y: y - 16,
+                            lines: [
+                              `Commit ${b.headSha?.slice(0, 7) ?? '-------'}`,
+                              `@${b.lastCommitAuthor}`,
+                              fmtTooltipDate(b.lastCommitDate),
+                            ],
+                          })
+                        }
+                        onMouseLeave={() => setTooltip(null)}
+                      />
+                    ))}
 
-                  {/* Branch name label */}
-                  <text
-                    x={forkX + 16}
-                    y={y - 22}
-                    fontSize={isSelected ? 13 : 12}
-                    fontWeight={isSelected ? 600 : 400}
-                    fill={isSelected ? '#22d3ee' : isHovered ? '#fafaf9' : color}
-                    className="select-none"
-                    onMouseEnter={() => setHoveredBranch(b.name)}
-                    onMouseLeave={() => setHoveredBranch(null)}
-                  >
-                    {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
-                  </text>
+                    {/* Author initial circle */}
+                    <circle cx={forkX} cy={y - 26} r={9} fill={isSelected ? '#0891b2' : '#57534e'} />
+                    <text
+                      x={forkX}
+                      y={y - 22}
+                      textAnchor="middle"
+                      fontSize={10}
+                      fill={isSelected ? '#ecfeff' : '#e7e5e4'}
+                      fontWeight={500}
+                    >
+                      {b.lastCommitAuthor?.charAt(0).toUpperCase() || '?'}
+                    </text>
 
-                  {/* Commits ahead badge */}
-                  <text
-                    x={tipX + TRAIL + 10}
-                    y={y + 4}
-                    fontSize={10}
-                    fill="#78716c"
-                  >
-                    +{b.commitsAhead}
-                  </text>
+                    {/* Branch name label */}
+                    <text
+                      x={forkX + 16}
+                      y={y - 22}
+                      fontSize={isSelected ? 13 : 12}
+                      fontWeight={isSelected ? 600 : 400}
+                      fill={isSelected ? '#22d3ee' : isHovered ? '#fafaf9' : color}
+                      className="select-none"
+                      onMouseEnter={() => setHoveredBranch(b.name)}
+                      onMouseLeave={() => setHoveredBranch(null)}
+                    >
+                      {b.name.length > 22 ? b.name.slice(0, 22) + '…' : b.name}
+                    </text>
+
+                    {/* Commits ahead badge */}
+                    <text
+                      x={tipX + TRAIL + 10}
+                      y={y + 4}
+                      fontSize={10}
+                      fill="#78716c"
+                    >
+                      +{b.commitsAhead}
+                    </text>
+                  </g>
 
                   {/* Status icons below main line */}
                   {b.status === 'stale' && (
@@ -573,7 +668,7 @@ export default function BranchMap({
             })}
           </g>
 
-          {/* Tooltip */}
+          {/* Tooltip for branch commits */}
           {tooltip && (
             <g>
               <rect
@@ -598,6 +693,32 @@ export default function BranchMap({
                   {line}
                 </text>
               ))}
+            </g>
+          )}
+
+          {/* Tooltip for PR commit SHAs */}
+          {hoveredPRCommit && (
+            <g>
+              <rect
+                x={hoveredPRCommit.x - 50}
+                y={hoveredPRCommit.arcY - 55}
+                width={100}
+                height={28}
+                rx={4}
+                fill="#292524"
+                stroke="#44403c"
+                strokeWidth={1}
+              />
+              <text
+                x={hoveredPRCommit.x}
+                y={hoveredPRCommit.arcY - 36}
+                textAnchor="middle"
+                fontSize={12}
+                fontFamily="monospace"
+                fill="#22d3ee"
+              >
+                {hoveredPRCommit.sha ?? `commit ${hoveredPRCommit.commitIdx + 1}`}
+              </text>
             </g>
           )}
         </svg>

@@ -19,6 +19,8 @@ function App() {
   const [view, setView] = useState<View>('landing');
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [githubAvailable, setGithubAvailable] = useState(false);
+  const [githubOwner, setGithubOwner] = useState<string | null>(null);
+  const [githubRepo, setGithubRepo] = useState<string | null>(null);
 
   async function loadRepo(path: string) {
     setLoading(true);
@@ -57,6 +59,8 @@ function App() {
 
       if (ghInfo.ghAvailable) {
         setGithubAvailable(true);
+        setGithubOwner(ghInfo.owner);
+        setGithubRepo(ghInfo.repo);
         // Fetch merged PRs
         const prs = await invoke<MergedPR[]>('get_merged_prs', {
           owner: ghInfo.owner,
@@ -174,6 +178,8 @@ function App() {
               onBranchClick={handleBranchClick}
               onLoadMore={loadMoreNodes}
               githubAvailable={githubAvailable}
+              githubOwner={githubOwner}
+              githubRepo={githubRepo}
             />
           </div>
         </>

@@ -335,6 +335,15 @@ fn get_merged_prs(
     github::get_merged_prs(&owner, &repo, &base_branch, limit)
 }
 
+#[tauri::command(rename_all = "camelCase")]
+fn get_pr_commits(
+    owner: String,
+    repo: String,
+    pr_numbers: Vec<i64>,
+) -> Result<std::collections::HashMap<i64, Vec<String>>, String> {
+    github::get_pr_commits(&owner, &repo, &pr_numbers)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -345,6 +354,7 @@ pub fn run() {
             get_repo_info,
             get_github_info,
             get_merged_prs,
+            get_pr_commits,
             list_directory,
             search_directories,
             get_home_dir,

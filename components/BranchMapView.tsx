@@ -22,6 +22,8 @@ interface Props {
   onBranchClick?: (branch: Branch) => void;
   onLoadMore?: () => void;
   githubAvailable?: boolean;
+  githubOwner?: string | null;
+  githubRepo?: string | null;
 }
 
 export default function BranchMapView({
@@ -34,6 +36,8 @@ export default function BranchMapView({
   onBranchClick,
   onLoadMore,
   githubAvailable = false,
+  githubOwner,
+  githubRepo,
 }: Props) {
   const [view, setView] = useState<ViewMode>('time');
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -95,6 +99,8 @@ export default function BranchMapView({
             onBranchSelect={onBranchSelect}
             onBranchClick={onBranchClick}
             onLoadMore={onLoadMore}
+            githubOwner={githubOwner}
+            githubRepo={githubRepo}
           />
         </div>
       ) : (
