@@ -1,6 +1,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import { X } from 'lucide-react';
 import { Branch, MergeNode, MergedPR } from '../types';
+import { ViewMode } from './BranchMapView';
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LEFT_PAD = 60;
@@ -12,28 +14,29 @@ const CORNER_R = 20;
 const MAX_ACTIVE = 50;
 const ZOOM_MIN = 0.25;
 const ZOOM_MAX = 4;
-const MERGED_LANE_HEIGHT = 60;
-const MERGED_LANES = 4;
 
 type TooltipData = { x: number; y: number; lines: string[] };
-type PRCommitHover = { x: number; arcY: number; pr: MergedPR; commitIdx: number; sha?: string };
+type PRCommitHover = { x: number; arcY: number; pr: MergedPR; commitIdx: number; total: number };
+
+function fmtRelativeDate(dateStr: string): string {
+  const diffDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
+  if (diffDays === 0) return 'today';
+  if (diffDays === 1) return 'yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`;
+  return `${Math.floor(diffDays / 30)}mo ago`;
+}
 
 function fmtTooltipDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
+    month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit',
   });
 }
 
 function fmtLabelDate(dateStr: string) {
   return new Date(dateStr).toLocaleDateString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: '2-digit',
-    hour: 'numeric',
-    minute: '2-digit',
+    month: 'short', day: 'numeric', year: '2-digit',
+    hour: 'numeric', minute: '2-digit',
   });
 }
 
@@ -48,6 +51,10 @@ interface BranchMapProps {
   onLoadMore?: () => void;
   githubOwner?: string | null;
   githubRepo?: string | null;
+  view?: ViewMode;
+  conflictBranches?: Branch[];
+  staleBranches?: Branch[];
+  isLoading?: boolean;
 }
 
 export default function BranchMap({
@@ -60,6 +67,10 @@ export default function BranchMap({
   onBranchClick,
   githubOwner,
   githubRepo,
+  view = 'time',
+  conflictBranches = [],
+  staleBranches = [],
+  isLoading = false,
 }: BranchMapProps) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
@@ -69,6 +80,7 @@ export default function BranchMap({
   const [zoom, setZoom] = useState(1);
 
   const scrollRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
   const zoomScrollAnchor = useRef<{
     contentX: number;
     mouseX: number;
@@ -81,6 +93,11 @@ export default function BranchMap({
   const [thumbWidth, setThumbWidth] = useState(48);
   const barRangeRef = useRef<HTMLInputElement>(null);
   const [containerHeight, setContainerHeight] = useState(540);
+
+  // PR issues panel state
+  const errorBranches = [...conflictBranches, ...staleBranches];
+  const [errorPanelOpen, setErrorPanelOpen] = useState(false);
+  const errorPanelRef = useRef<HTMLDivElement>(null);
 
   // On initial mount, scroll to the right so most recent content is visible
   useEffect(() => {
@@ -170,15 +187,39 @@ export default function BranchMap({
       });
   }, [githubOwner, githubRepo, mergedPRs]);
 
+  // Close error panel on outside click
+  useEffect(() => {
+    if (!errorPanelOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!errorPanelRef.current?.contains(e.target as Node)) setErrorPanelOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [errorPanelOpen]);
+
   // ── Separate active vs merged branches ──────────────────────────────────────
-  const mergedBranchNames = new Set(mergedPRs.map(pr => pr.branchName));
+  const STATUS_PRIORITY: Record<string, number> = { 'conflict-risk': 0, stale: 1, fresh: 2, unknown: 3 };
+  const mergedBranchDates = new Map(mergedPRs.map(pr => [pr.branchName, pr.mergedAt]));
   const activeBranches = branches
-    .filter((b) => b.name !== defaultBranch && b.commitsAhead > 0 && !mergedBranchNames.has(b.name))
-    .sort(
-      (a, b) =>
-        new Date(b.lastCommitDate).getTime() -
-        new Date(a.lastCommitDate).getTime()
-    )
+    .filter(b => {
+      if (b.name === defaultBranch) return false;
+      const mergedAt = mergedBranchDates.get(b.name);
+      if (!mergedAt) return true;
+      // Show if the branch has been updated after the PR was merged (new branch, same name)
+      return new Date(b.lastCommitDate) > new Date(mergedAt);
+    })
+    .sort((a, b) => {
+      if (view === 'status') {
+        const diff = STATUS_PRIORITY[a.status] - STATUS_PRIORITY[b.status];
+        return diff !== 0 ? diff : new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+      }
+      if (view === 'creator') {
+        const diff = a.lastCommitAuthor.localeCompare(b.lastCommitAuthor);
+        return diff !== 0 ? diff : new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+      }
+      // 'time': most recently committed first
+      return new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime();
+    })
     .slice(0, MAX_ACTIVE);
 
   // ── Animation delays: sort all arcs newest → oldest, stagger after main line ─
@@ -271,19 +312,30 @@ export default function BranchMap({
     return Math.max(max, tipX + 80);
   }, mainEndX);
   const svgWidth = maxBranchTipX + RIGHT_PAD + 80;
+
+  // Merged PRs lane layout
+  const MERGED_LANE_HEIGHT = 60;
+  const MERGED_LANES = 4;
   const svgHeight = Math.max(mainY + 120, containerHeight);
 
   return (
-    <div className="relative h-full">
+    <div className="h-full">
       <div
         ref={scrollRef}
-        className="w-full h-full overflow-x-auto overflow-y-hidden branch-map-scroll"
+        className="w-full h-full overflow-x-auto overflow-y-hidden branch-map-scroll relative"
       >
         <svg
+          ref={svgRef}
           width={svgWidth}
           height={svgHeight}
           style={{ minWidth: svgWidth, display: 'block' }}
         >
+          <defs>
+            <filter id="tick-shadow" x="-50%" y="-50%" width="200%" height="200%">
+              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.22" />
+            </filter>
+          </defs>
+
           {/* ── Main timeline + merge nodes ── */}
           <g style={{ opacity: hoveredPR !== null ? 0.2 : 1, transition: 'opacity 0.15s' }}>
             <line
@@ -432,7 +484,6 @@ export default function BranchMap({
 
                   {/* Commit ticks — interactive with SHA tooltips */}
                   {commitXs.map((cx, ci) => {
-                    const sha = shas?.[ci];
                     const isTickHovered = isHovered &&
                       hoveredPRCommit?.pr.number === pr.number &&
                       hoveredPRCommit?.commitIdx === ci;
@@ -459,7 +510,7 @@ export default function BranchMap({
                           style={{ cursor: 'crosshair' }}
                           onMouseEnter={(e) => {
                             e.stopPropagation();
-                            setHoveredPRCommit({ x: cx, arcY, pr, commitIdx: ci, sha });
+                            setHoveredPRCommit({ x: cx, arcY, pr, commitIdx: ci, total: commitCount });
                           }}
                           onMouseLeave={(e) => {
                             e.stopPropagation();
@@ -496,15 +547,18 @@ export default function BranchMap({
             {activeBranches.map((b) => {
               const forkX = branchForkX(b);
               const y = laneY(b);
-              const isError = b.status === 'conflict-risk';
+              const isConflict = b.status === 'conflict-risk';
+              const isStale = b.status === 'stale';
               const isSelected = selectedBranch?.name === b.name;
               const isHovered = hoveredBranch === b.name;
               const hasSelection = selectedBranch != null;
 
               const color = isSelected
                 ? '#22d3ee'
-                : isError
-                ? '#ef4444'
+                : isConflict
+                ? '#dc2626'
+                : isStale
+                ? '#d97706'
                 : hasSelection
                 ? '#57534e'
                 : '#a8a29e';
@@ -576,6 +630,10 @@ export default function BranchMap({
                       stroke={color}
                       strokeWidth={strokeWidth}
                     />
+                    {/* Branch name label below main line */}
+                    <text x={forkX} y={mainY + 20} textAnchor="middle" fontSize={10} fill="#78716c">
+                      {b.name.length > 18 ? b.name.slice(0, 18) + '…' : b.name}
+                    </text>
 
                     {/* Commit filled squares along branch */}
                     {commitXs.map((cx, ci) => (
@@ -585,7 +643,7 @@ export default function BranchMap({
                         y={y - NODE_SIZE / 2}
                         width={NODE_SIZE}
                         height={NODE_SIZE}
-                        fill={isSelected ? '#22d3ee' : isError ? '#ef4444' : '#78716c'}
+                        fill={isSelected ? '#22d3ee' : isConflict ? '#dc2626' : isStale ? '#d97706' : '#78716c'}
                         onMouseEnter={() =>
                           setTooltip({
                             x: cx,
@@ -639,30 +697,17 @@ export default function BranchMap({
                     </text>
                   </g>
 
-                  {/* Status icons below main line */}
-                  {b.status === 'stale' && (
-                    <g>
-                      <title>Out of date — no commits in 14+ days</title>
-                      <text x={forkX - 8} y={mainY + 62} fontSize={13}>
-                        📅
+                    {/* Status labels below main line */}
+                    {isStale && (
+                      <text x={forkX} y={mainY + 34} textAnchor="middle" fontSize={10} fill="#d97706">
+                        stale
                       </text>
-                    </g>
-                  )}
-                  {b.status === 'conflict-risk' && (
-                    <g>
-                      <title>
-                        Conflict risk — branch is significantly behind
-                      </title>
-                      <text
-                        x={forkX - 8}
-                        y={mainY + 62}
-                        fontSize={13}
-                        fill="#ef4444"
-                      >
-                        ⚠
+                    )}
+                    {isConflict && (
+                      <text x={forkX} y={mainY + 34} textAnchor="middle" fontSize={10} fill="#dc2626">
+                        conflict
                       </text>
-                    </g>
-                  )}
+                    )}
                 </g>
               );
             })}
@@ -696,31 +741,31 @@ export default function BranchMap({
             </g>
           )}
 
-          {/* Tooltip for PR commit SHAs */}
-          {hoveredPRCommit && (
-            <g>
-              <rect
-                x={hoveredPRCommit.x - 50}
-                y={hoveredPRCommit.arcY - 55}
-                width={100}
-                height={28}
-                rx={4}
-                fill="#292524"
-                stroke="#44403c"
-                strokeWidth={1}
-              />
-              <text
-                x={hoveredPRCommit.x}
-                y={hoveredPRCommit.arcY - 36}
-                textAnchor="middle"
-                fontSize={12}
-                fontFamily="monospace"
-                fill="#22d3ee"
-              >
-                {hoveredPRCommit.sha ?? `commit ${hoveredPRCommit.commitIdx + 1}`}
-              </text>
-            </g>
-          )}
+          {/* Tooltip for PR commit SHAs — positioned below the tick */}
+          {hoveredPRCommit && (() => {
+            const { x, arcY, pr, commitIdx } = hoveredPRCommit;
+            const sha = prCommits.get(pr.number)?.[commitIdx];
+            const TW = 200;
+            const TH = 68;
+            const tx = x - TW / 2;
+            const ty = arcY + 14;
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                <rect x={tx} y={ty} width={TW} height={TH} rx={5}
+                  fill="#292524" stroke="#44403c" strokeWidth={1}
+                  filter="url(#tick-shadow)" />
+                <text x={tx + 10} y={ty + 18} fontSize={11} fontWeight={600} fill="#22d3ee" fontFamily="monospace">
+                  {sha ?? `commit ${commitIdx + 1}`}
+                </text>
+                <text x={tx + 10} y={ty + 33} fontSize={10} fill="#a8a29e">
+                  PR #{pr.number} · {pr.branchName.length > 22 ? pr.branchName.slice(0, 22) + '…' : pr.branchName}
+                </text>
+                <text x={tx + 10} y={ty + 48} fontSize={10} fill="#78716c">
+                  @{pr.authorLogin} · merged {fmtLabelDate(pr.mergedAt)}
+                </text>
+              </g>
+            );
+          })()}
         </svg>
 
         {/* Empty state */}
@@ -731,46 +776,130 @@ export default function BranchMap({
         )}
       </div>
 
-      {/* Bottom chrome: scrollbar + zoom controls */}
-      <div className="absolute bottom-4 left-4 right-4 flex items-center gap-4">
-        <input
-          ref={barRangeRef}
-          type="range"
-          min={0}
-          max={Math.max(1, barScrollMax)}
-          value={barScrollLeft}
-          style={{ ['--thumb-w' as string]: `${thumbWidth}px` }}
-          onChange={(e) => {
-            if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value);
+      {/* Fixed bottom chrome: PR issues button + scrollbar + zoom */}
+      <div className="fixed bottom-6 left-6 right-6 flex flex-col gap-2 z-50">
+
+        {/* PR issues button — above scrollbar, right-aligned */}
+        {errorBranches.length > 0 && (
+          <div className="flex justify-end">
+            <button
+              onClick={() => setErrorPanelOpen((o) => !o)}
+              className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 transition-colors ${
+                errorPanelOpen
+                  ? 'text-destructive border-destructive/40 bg-destructive/10'
+                  : 'text-destructive border-destructive/20 bg-destructive/5 hover:bg-destructive/10'
+              }`}
+            >
+              ⚠ {errorBranches.length} PR issue{errorBranches.length !== 1 ? 's' : ''}
+            </button>
+          </div>
+        )}
+
+        {/* Scrollbar + zoom row */}
+        <div
+          className="flex items-center gap-4"
+          style={{
+            opacity: isLoading ? 0 : 1,
+            transition: 'opacity 0.4s ease',
           }}
-          className="bottom-scroll-range flex-1"
-        />
-        <div className="flex items-center gap-1 bg-card border border-border rounded-lg shadow-sm px-2 py-1.5">
+        >
+          <input
+            ref={barRangeRef}
+            type="range"
+            min={0}
+            max={Math.max(1, barScrollMax)}
+            value={barScrollLeft}
+            style={{ ['--thumb-w' as string]: `${thumbWidth}px` }}
+            onChange={(e) => {
+              if (scrollRef.current) scrollRef.current.scrollLeft = Number(e.target.value);
+            }}
+            className="bottom-scroll-range flex-1"
+          />
+          <div className="flex items-center gap-2 shrink-0 bg-card border border-border rounded-full px-3 py-1">
+            <button
+              onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+              title="Zoom out"
+            >
+              −
+            </button>
+            <span className="text-xs text-muted-foreground w-10 text-center tabular-nums select-none">
+              {Math.round(zoom * 100)}%
+            </span>
+            <button
+              onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
+              title="Zoom in"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* PR issues panel — slides in from right */}
+      <div
+        ref={errorPanelRef}
+        className={`fixed right-4 top-14 bottom-6 w-72 flex flex-col bg-card/90 backdrop-blur-sm rounded-2xl border border-border shadow-lg z-40 transition-all duration-300 ease-in-out ${
+          errorPanelOpen ? 'translate-x-0 opacity-100' : 'translate-x-[110%] opacity-0 pointer-events-none'
+        }`}
+      >
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border/50 shrink-0">
+          <span className="text-sm font-medium text-foreground">PR issues</span>
           <button
-            onClick={() =>
-              setZoom((z) =>
-                Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100)
-              )
-            }
-            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
-            title="Zoom out"
+            onClick={() => setErrorPanelOpen(false)}
+            className="text-muted-foreground hover:text-foreground transition-colors"
           >
-            −
+            <X className="w-4 h-4" />
           </button>
-          <span className="text-xs text-muted-foreground w-12 text-center tabular-nums">
-            {Math.round(zoom * 100)}%
-          </span>
-          <button
-            onClick={() =>
-              setZoom((z) =>
-                Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100)
-              )
-            }
-            className="w-6 h-6 flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent rounded transition-colors text-base leading-none"
-            title="Zoom in"
-          >
-            +
-          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto py-2">
+          {conflictBranches.length > 0 && (
+            <>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-2 pb-1">
+                Merge conflicts
+              </p>
+              {conflictBranches.map(b => (
+                <div
+                  key={b.name}
+                  onClick={() => onBranchClick?.(b)}
+                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <span className="mt-0.5 w-2 h-2 rounded-full bg-destructive shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {staleBranches.length > 0 && (
+            <>
+              <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-4 pt-3 pb-1">
+                Stale PRs
+              </p>
+              {staleBranches.map(b => (
+                <div
+                  key={b.name}
+                  onClick={() => onBranchClick?.(b)}
+                  className="flex items-start gap-2.5 px-4 py-2.5 hover:bg-accent transition-colors cursor-pointer"
+                >
+                  <span className="mt-0.5 w-2 h-2 rounded-full bg-amber-500 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="text-xs font-medium text-foreground truncate">{b.name}</p>
+                    <p className="text-[11px] text-muted-foreground">
+                      {b.lastCommitAuthor ? `${b.lastCommitAuthor} · ` : ''}{fmtRelativeDate(b.lastCommitDate)}
+                    </p>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
         </div>
       </div>
     </div>

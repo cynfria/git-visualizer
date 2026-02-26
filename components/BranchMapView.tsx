@@ -57,6 +57,14 @@ export default function BranchMapView({
     ? ['time', 'status', 'creator']
     : ['time', 'status'];
 
+  // Extract error branches for the PR issues panel
+  const conflictBranches = branches
+    .filter(b => b.status === 'conflict-risk')
+    .sort((a, b) => new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime());
+  const staleBranches = branches
+    .filter(b => b.status === 'stale')
+    .sort((a, b) => new Date(b.lastCommitDate).getTime() - new Date(a.lastCommitDate).getTime());
+
   return (
     <div className="h-full flex flex-col">
       {/* View selector */}
@@ -101,6 +109,9 @@ export default function BranchMapView({
             onLoadMore={onLoadMore}
             githubOwner={githubOwner}
             githubRepo={githubRepo}
+            view={view}
+            conflictBranches={conflictBranches}
+            staleBranches={staleBranches}
           />
         </div>
       ) : (

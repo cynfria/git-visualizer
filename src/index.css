@@ -41,7 +41,8 @@
   --border:            #302E2B;
   --destructive:       #ef4444;
   --destructive-foreground: #ffffff;
-  --font-sans: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-sans: system-ui, -apple-system, sans-serif;
+  --font-space-grotesk: 'Space Grotesk', system-ui, -apple-system, sans-serif;
 }
 
 /* ── Tailwind v4 theme mapping ───────────────────────────────────────────── */
@@ -59,13 +60,19 @@
   --color-border:               var(--border);
   --color-destructive:          var(--destructive);
   --font-sans: var(--font-sans);
+  --font-space-grotesk: var(--font-space-grotesk);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans);
+  font-family: system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
+}
+
+/* Space Grotesk for repo titles */
+.font-space-grotesk {
+  font-family: var(--font-space-grotesk);
 }
 
 /* ── Branch map scrollbar — native scrollbar hidden, custom bottom bar used ── */
@@ -153,4 +160,24 @@ body {
 /* Prevent text selection in UI */
 .select-none {
   user-select: none;
+}
+
+/* ── Error panel slide-in animation ─────────────────────────────────────── */
+.error-panel-enter {
+  transform: translateX(110%);
+  opacity: 0;
+}
+.error-panel-enter-active {
+  transform: translateX(0);
+  opacity: 1;
+  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+}
+.error-panel-exit {
+  transform: translateX(0);
+  opacity: 1;
+}
+.error-panel-exit-active {
+  transform: translateX(110%);
+  opacity: 0;
+  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
 }

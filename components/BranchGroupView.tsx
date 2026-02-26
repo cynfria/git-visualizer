@@ -78,22 +78,22 @@ const STATUS_CONFIG: {
   {
     status: 'conflict-risk',
     label: 'Conflict risk',
-    color: '#dc2626',
-    bg: 'bg-red-900/10',
+    color: '#ef4444',
+    bg: 'bg-red-500/10',
     description: 'Cannot be cleanly merged',
   },
   {
     status: 'stale',
     label: 'Stale',
-    color: '#d97706',
-    bg: 'bg-amber-900/10',
+    color: '#f59e0b',
+    bg: 'bg-amber-500/10',
     description: 'No commits in 14+ days',
   },
   {
     status: 'fresh',
     label: 'Fresh',
-    color: '#16a34a',
-    bg: 'bg-green-900/10',
+    color: '#22c55e',
+    bg: 'bg-green-500/10',
     description: 'Recently active',
   },
 ];
@@ -170,10 +170,10 @@ function CreatorView({
   }
 
   const STATUS_COLORS: Record<BranchStatus, string> = {
-    'conflict-risk': '#dc2626',
-    stale: '#d97706',
-    fresh: '#16a34a',
-    unknown: '#6b7280',
+    'conflict-risk': '#ef4444',
+    stale: '#f59e0b',
+    fresh: '#22c55e',
+    unknown: '#78716c',
   };
 
   return (
