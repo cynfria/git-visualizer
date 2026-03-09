@@ -7,7 +7,7 @@ import { ViewMode } from './BranchMapView';
 // ── Layout constants ──────────────────────────────────────────────────────────
 const LEFT_PAD = 60;
 const RIGHT_PAD = 160;
-const MIN_BRANCH_SPACING_X = 120;
+const MIN_BRANCH_SPACING_X = 30;
 const LANE_HEIGHT = 60;
 const NODE_SIZE = 8;
 const CORNER_R = 20;
@@ -17,6 +17,23 @@ const ZOOM_MAX = 4;
 
 type TooltipData = { x: number; y: number; lines: string[] };
 type PRCommitHover = { x: number; arcY: number; pr: MergedPR; commitIdx: number; total: number };
+
+function smoothScrollTo(el: HTMLElement, targetLeft: number, durationMs: number) {
+  const startLeft = el.scrollLeft;
+  const delta = targetLeft - startLeft;
+  if (Math.abs(delta) < 1) return;
+  const startTime = performance.now();
+  function easeInOutCubic(t: number) {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+  function step(now: number) {
+    const elapsed = now - startTime;
+    const t = Math.min(1, elapsed / durationMs);
+    el.scrollLeft = startLeft + delta * easeInOutCubic(t);
+    if (t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
 
 function fmtRelativeDate(dateStr: string): string {
   const diffDays = Math.floor((Date.now() - new Date(dateStr).getTime()) / 86400000);
@@ -59,6 +76,7 @@ interface BranchMapProps {
   openPRs?: OpenPR[];
   isLoading?: boolean;
   scrollRequest?: { branch: Branch; seq: number } | null;
+  focusedErrorBranch?: Branch | null;
 }
 
 export default function BranchMap({
@@ -79,18 +97,20 @@ export default function BranchMap({
   openPRs = [],
   isLoading = false,
   scrollRequest,
+  focusedErrorBranch,
 }: BranchMapProps) {
   const [tooltip, setTooltip] = useState<TooltipData | null>(null);
   const [hoveredBranch, setHoveredBranch] = useState<string | null>(null);
   const [hoveredPR, setHoveredPR] = useState<number | null>(null);
   const [hoveredPRCommit, setHoveredPRCommit] = useState<PRCommitHover | null>(null);
+  const [hoveredMergeNode, setHoveredMergeNode] = useState<{ x: number; node: MergeNode } | null>(null);
   const [prCommits, setPrCommits] = useState<Map<number, string[]>>(new Map());
   const [zoom, setZoom] = useState(1);
   // WKWebView (Tauri) doesn't fire CSS animations on SVG elements inserted during
   // the initial paint. Defer animation classes by one rAF so they start post-paint.
   const [drawReady, setDrawReady] = useState(false);
-  // flashRing: name of branch to pulse, opacity animates via React state (not CSS keyframes — WKWebView reliability)
-  const [flashRing, setFlashRing] = useState<{ name: string; opacity: number } | null>(null);
+  // flashingName: branch in "bright" phase right after focus (clears after 700ms, triggering CSS stroke transition to lighter red)
+  const [_flashingName, setFlashingName] = useState<string | null>(null);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -260,8 +280,8 @@ export default function BranchMap({
     return () => document.removeEventListener('mousedown', handler);
   }, [errorPanelOpen]);
 
-  // Scroll timeline to the requested branch, then pulse a ring around its fork point.
-  // Uses scrollRequest.seq so the same branch can be re-clicked reliably.
+  // Scroll timeline to the requested branch. Set flashingName briefly so the arc
+  // starts bright red, then CSS stroke transition fades it to the settled lighter red.
   useEffect(() => {
     if (!scrollRequest || !scrollRef.current) return;
     const { branch } = scrollRequest;
@@ -269,12 +289,10 @@ export default function BranchMap({
       ? timeToX(branch.divergedFromDate)
       : timeToX(branch.lastCommitDate);
     const viewWidth = scrollRef.current.clientWidth;
-    scrollRef.current.scrollTo({ left: Math.max(0, x - viewWidth / 2), behavior: 'smooth' });
-    // React-state ring animation (CSS keyframes unreliable on dynamically-inserted SVG in WKWebView)
-    setFlashRing({ name: branch.name, opacity: 1 });
-    const t1 = setTimeout(() => setFlashRing(r => r ? { ...r, opacity: 0 } : null), 500);
-    const t2 = setTimeout(() => setFlashRing(null), 1100);
-    return () => { clearTimeout(t1); clearTimeout(t2); };
+    smoothScrollTo(scrollRef.current, Math.max(0, x - viewWidth / 2), 600);
+    setFlashingName(branch.name);
+    const t = setTimeout(() => setFlashingName(null), 700);
+    return () => clearTimeout(t);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [scrollRequest]);
 
@@ -347,7 +365,6 @@ export default function BranchMap({
       ? new Date(sortedNodes[sortedNodes.length - 1].date).getTime()
       : firstNodeT + 1;
   const nodeTimeSpan = Math.max(lastNodeT - firstNodeT, 1);
-  const pxPerMs = (mainEndX - LEFT_PAD) / nodeTimeSpan;
 
   // When extrapolating dates outside the merge-node range, use a rate capped at
   // 1 NODE_SPACING per 7 days. This prevents active branches on fast-moving repos
@@ -431,12 +448,12 @@ export default function BranchMap({
         >
           <defs>
             <filter id="tick-shadow" x="-50%" y="-50%" width="200%" height="200%">
-              <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity="0.22" />
+              <feDropShadow dx="0" dy="2" stdDeviation="6" floodColor="#000" floodOpacity="0.08" />
             </filter>
           </defs>
 
           {/* ── Main timeline + merge nodes ── */}
-          <g style={{ opacity: hoveredPR !== null ? 0.2 : 1, transition: 'opacity 0.15s' }}>
+          <g style={{ opacity: hoveredPR !== null || hoveredBranch !== null ? 0.2 : 1, transition: 'opacity 0.15s' }}>
             {/* Use <path> not <line>: pathLength on <line> is SVG 2 only and unreliable in WKWebView */}
             <path
               d={`M ${LEFT_PAD} ${mainY} L ${mainEndX} ${mainY}`}
@@ -478,11 +495,12 @@ export default function BranchMap({
                   const x = timeToX(c.date);
                   const label = c.message.length > 38 ? c.message.slice(0, 38) + '…' : c.message;
                   return (
-                    <circle
+                    <rect
                       key={c.fullSha}
-                      cx={x}
-                      cy={mainY}
-                      r={3}
+                      x={x - 3}
+                      y={mainY - 3}
+                      width={6}
+                      height={6}
                       fill="#57534e"
                       style={{ cursor: 'default' }}
                       onMouseEnter={() =>
@@ -497,53 +515,74 @@ export default function BranchMap({
                   );
                 })}
 
-              {sortedNodes.map((m) => {
-                const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
-                const label = m.prNumber ? `PR #${m.prNumber}` : m.sha;
-                const title =
-                  (m.prTitle ?? '').slice(0, 22) +
-                  ((m.prTitle?.length ?? 0) > 22 ? '…' : '');
-                return (
-                  <g key={m.fullSha}>
-                    <rect
-                      x={x - NODE_SIZE / 2}
-                      y={mainY - NODE_SIZE / 2}
-                      width={NODE_SIZE}
-                      height={NODE_SIZE}
-                      fill="#fafaf9"
-                      stroke="#78716c"
-                      strokeWidth={1.5}
-                    />
-                    <text
-                      x={x}
-                      y={mainY + 20}
-                      textAnchor="middle"
-                      fontSize={11}
-                      fill="#57534e"
-                    >
-                      {label}
-                    </text>
-                    <text
-                      x={x}
-                      y={mainY + 32}
-                      textAnchor="middle"
-                      fontSize={10}
-                      fill="#78716c"
-                    >
-                      {title}
-                    </text>
-                    <text
-                      x={x}
-                      y={mainY + 44}
-                      textAnchor="middle"
-                      fontSize={9}
-                      fill="#78716c"
-                    >
-                      {fmtLabelDate(m.date)}
-                    </text>
-                  </g>
-                );
-              })}
+              {(() => {
+                // Progressive label culling as zoom decreases.
+                // Step 1: decide which content lines to show based on node spacing.
+                //   ≥130px → full (PR#, title, date)
+                //   ≥80px  → medium (PR#, date — no title)
+                //   ≥40px  → minimal (PR# only)
+                //   <40px  → no labels at all (hover tooltip still works)
+                // Step 2: min gap between shown labels = width of the widest line
+                //   being rendered, so labels never overlap their neighbours.
+                const showTitle  = NODE_SPACING >= 130;
+                const showDate   = NODE_SPACING >= 80;
+                const anyLabel   = NODE_SPACING >= 40;
+                const minLabelGap = showTitle ? 130 : showDate ? 100 : anyLabel ? 55 : Infinity;
+
+                let lastLabelX = -Infinity;
+                return sortedNodes.map((m) => {
+                  const x = nodeXByFullSha.get(m.fullSha) ?? timeToX(m.date);
+                  const showLabel = anyLabel && x - lastLabelX >= minLabelGap;
+                  if (showLabel) lastLabelX = x;
+                  const label = m.prNumber ? `PR #${m.prNumber}` : m.sha.slice(0, 7);
+                  const isHovered = hoveredMergeNode?.node.fullSha === m.fullSha;
+                  const HIT = 20;
+                  return (
+                    <g key={m.fullSha}>
+                      {/* Visible tick — pointer-events off so hit rect handles hover */}
+                      <rect
+                        x={x - NODE_SIZE / 2}
+                        y={mainY - NODE_SIZE / 2}
+                        width={NODE_SIZE}
+                        height={NODE_SIZE}
+                        rx={2}
+                        fill="#fafaf9"
+                        stroke={isHovered ? '#44403c' : '#78716c'}
+                        strokeWidth={isHovered ? 2 : 1.5}
+                        style={{ pointerEvents: 'none', transition: 'stroke 0.1s' }}
+                      />
+                      {/* Transparent hit area for hover — rendered on top */}
+                      <rect
+                        x={x - HIT / 2}
+                        y={mainY - HIT / 2}
+                        width={HIT}
+                        height={HIT}
+                        fill="transparent"
+                        style={{ cursor: 'default' }}
+                        onMouseEnter={() => setHoveredMergeNode({ x, node: m })}
+                        onMouseLeave={() => setHoveredMergeNode(null)}
+                      />
+                      {showLabel && (
+                        <>
+                          <text x={x} y={mainY + 20} textAnchor="middle" fontSize={12} fill="#57534e">
+                            {label}
+                          </text>
+                          {showTitle && (
+                            <text x={x} y={mainY + 32} textAnchor="middle" fontSize={10} fill="#78716c">
+                              {(m.prTitle ?? '').slice(0, 22) + ((m.prTitle?.length ?? 0) > 22 ? '…' : '')}
+                            </text>
+                          )}
+                          {showDate && (
+                            <text x={x} y={showTitle ? mainY + 44 : mainY + 32} textAnchor="middle" fontSize={10} fill="#78716c">
+                              {fmtLabelDate(m.date)}
+                            </text>
+                          )}
+                        </>
+                      )}
+                    </g>
+                  );
+                });
+              })()}
             </g>
           </g>
 
@@ -558,8 +597,9 @@ export default function BranchMap({
             const effectiveMergeX = Math.max(mergeX, forkX + CORNER_R * 2 + 20);
 
             const isHovered = hoveredPR === pr.number;
-            const isDimmed = hoveredPR !== null && !isHovered;
-            const opacity = isDimmed ? 0.1 : isHovered ? 0.85 : 0.38;
+            const isDimmed = (hoveredPR !== null && !isHovered) || hoveredBranch !== null;
+            const isFocusedPR = focusedErrorBranch?.name === pr.branchName;
+            const opacity = isFocusedPR ? 1 : isDimmed ? 0.1 : isHovered ? 0.85 : 0.38;
             const strokeColor = isHovered ? '#44403c' : '#78716c';
             const strokeWidth = isHovered ? 1.6 : 1.2;
 
@@ -581,6 +621,7 @@ export default function BranchMap({
             const prDelay = prDelayMs.get(pr.number) ?? 0;
 
             const mergedBranch = branches.find(b => b.name === pr.branchName);
+            const focusedPRColor = mergedBranch?.status === 'conflict-risk' ? '#dc2626' : '#d97706';
             return (
               <g
                 key={pr.number}
@@ -596,8 +637,8 @@ export default function BranchMap({
                 <path
                   d={arcPath}
                   fill="none"
-                  stroke={strokeColor}
-                  strokeWidth={strokeWidth}
+                  stroke={isFocusedPR ? focusedPRColor : strokeColor}
+                  strokeWidth={focusedErrorBranch?.name === pr.branchName ? 2 : strokeWidth}
                   pathLength={1}
                   className="draw-path-arc"
                   style={{ pointerEvents: 'none', '--delay': `${prDelay}ms` } as React.CSSProperties}
@@ -606,11 +647,11 @@ export default function BranchMap({
                 {/* Arc info — fades in as arc draws */}
                 <g className="fade-in-info" style={{ '--delay': `${prDelay + INFO_OFFSET}ms` } as React.CSSProperties}>
                   <rect x={forkX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                    width={NODE_SIZE} height={NODE_SIZE}
-                    fill="#fafaf9" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                    width={NODE_SIZE} height={NODE_SIZE} rx={2}
+                    fill="#fafaf9" stroke={isFocusedPR ? focusedPRColor : strokeColor} strokeWidth={isFocusedPR ? 1.5 : 1} style={{ pointerEvents: 'none' }} />
                   <rect x={effectiveMergeX - NODE_SIZE / 2} y={mainY - NODE_SIZE / 2}
-                    width={NODE_SIZE} height={NODE_SIZE}
-                    fill="#fafaf9" stroke={strokeColor} strokeWidth={1} style={{ pointerEvents: 'none' }} />
+                    width={NODE_SIZE} height={NODE_SIZE} rx={2}
+                    fill="#fafaf9" stroke={isFocusedPR ? focusedPRColor : strokeColor} strokeWidth={isFocusedPR ? 1.5 : 1} style={{ pointerEvents: 'none' }} />
 
                   {/* Commit ticks — interactive with SHA tooltips */}
                   {commitXs.map((cx, ci) => {
@@ -627,7 +668,8 @@ export default function BranchMap({
                           y={arcY - tickSize / 2}
                           width={tickSize}
                           height={tickSize}
-                          fill={isHovered ? '#a8a29e' : '#78716c'}
+                          rx={1.5}
+                          fill={isFocusedPR ? focusedPRColor : isHovered ? '#a8a29e' : '#78716c'}
                           style={{ pointerEvents: 'none', transition: 'all 0.1s' }}
                         />
                         {/* Invisible hit area */}
@@ -664,7 +706,7 @@ export default function BranchMap({
                   ) : (
                     <circle cx={midX} cy={arcY - 22} r={8} fill="#57534e" />
                   )}
-                  <text x={midX + 14} y={arcY - 18} fontSize={11} fill={isHovered ? '#1c1917' : '#57534e'}>
+                  <text x={midX + 14} y={arcY - 18} fontSize={12} fill={isHovered ? '#1c1917' : '#57534e'}>
                     {pr.branchName.length > 20 ? pr.branchName.slice(0, 20) + '…' : pr.branchName}
                   </text>
                 </g>
@@ -687,7 +729,11 @@ export default function BranchMap({
               const daysSinceCommit = (Date.now() - new Date(b.lastCommitDate).getTime()) / 86400000;
               const showClockIcon = hasOpenPR && daysSinceCommit >= 60;
 
-              const color = isSelected
+              const isFocusedError = focusedErrorBranch?.name === b.name;
+              const focusedErrorColor = b.status === 'conflict-risk' ? '#dc2626' : '#d97706';
+              const color = isFocusedError
+                ? focusedErrorColor
+                : isSelected
                 ? '#22d3ee'
                 : isInactiveError
                 ? '#78716c'
@@ -698,7 +744,8 @@ export default function BranchMap({
                 : hasSelection
                 ? '#57534e'
                 : '#78716c';
-              const strokeWidth = isSelected ? 2.5 : 1.5;
+              const strokeWidth = isSelected ? 2.5 : isHovered ? 2 : isFocusedError ? 2 : 1.5;
+              const strokeColor = isHovered && !isSelected ? '#44403c' : color;
 
               const TRAIL = 80;
               const lastCommitX = timeToX(b.lastCommitDate);
@@ -728,21 +775,8 @@ export default function BranchMap({
                   className="cursor-pointer"
                   onClick={() => onBranchSelect?.(b)}
                   onDoubleClick={() => onBranchClick?.(b)}
-                  style={{ opacity: isInactiveError ? 0.45 : hasSelection && !isSelected ? 0.5 : 1 }}
+                  style={{ opacity: isFocusedError ? 1 : hoveredBranch !== null && !isHovered ? 0.12 : isInactiveError ? 0.45 : hasSelection && !isSelected ? 0.5 : 1, transition: 'opacity 0.15s' }}
                 >
-                  {/* Flash ring when scrolled-to from error panel */}
-                  {flashRing?.name === b.name && (
-                    <circle
-                      cx={forkX}
-                      cy={mainY}
-                      r={16}
-                      fill="none"
-                      stroke={isConflict ? '#dc2626' : '#d97706'}
-                      strokeWidth={2.5}
-                      opacity={flashRing.opacity}
-                      style={{ transition: 'opacity 0.6s ease-out' }}
-                    />
-                  )}
                   {/* Glow effect for selected branch — keyed so it never displaces the arc path */}
                   {isSelected && (
                     <path
@@ -761,11 +795,11 @@ export default function BranchMap({
                     key="arc"
                     d={curvePath}
                     fill="none"
-                    stroke={color}
+                    stroke={strokeColor}
                     strokeWidth={strokeWidth}
                     pathLength={1}
                     className="draw-path-arc"
-                    style={{ '--delay': `${brDelay}ms` } as React.CSSProperties}
+                    style={{ '--delay': `${brDelay}ms`, transition: 'stroke 0.12s ease, stroke-width 0.12s ease' } as React.CSSProperties}
                   />
 
                   {/* Branch info — fades in as arc draws */}
@@ -776,9 +810,10 @@ export default function BranchMap({
                       y1={y}
                       x2={tipX + TRAIL}
                       y2={y}
-                      stroke={color}
+                      stroke={strokeColor}
                       strokeWidth={strokeWidth}
                       strokeDasharray="6 5"
+                      style={{ transition: 'stroke 0.12s ease, stroke-width 0.12s ease' }}
                     />
 
                     {/* Fork hollow square on main */}
@@ -787,7 +822,8 @@ export default function BranchMap({
                       y={mainY - NODE_SIZE / 2}
                       width={NODE_SIZE}
                       height={NODE_SIZE}
-                      fill={isSelected ? '#22d3ee' : '#1c1917'}
+                      rx={2}
+                      fill={isSelected ? '#22d3ee' : isFocusedError ? color : '#1c1917'}
                       stroke={color}
                       strokeWidth={strokeWidth}
                     />
@@ -806,7 +842,8 @@ export default function BranchMap({
                         y={y - NODE_SIZE / 2}
                         width={NODE_SIZE}
                         height={NODE_SIZE}
-                        fill={isSelected ? '#22d3ee' : isInactiveError ? '#78716c' : isConflict ? '#dc2626' : isStale ? '#d97706' : '#78716c'}
+                        rx={2}
+                        fill={color}
                         onMouseEnter={() =>
                           setTooltip({
                             x: cx,
@@ -839,9 +876,10 @@ export default function BranchMap({
                     <text
                       x={forkX + CORNER_R + 24}
                       y={y - 22}
-                      fontSize={isSelected ? 13 : 12}
+                      fontSize={12}
                       fontWeight={isSelected ? 600 : 400}
                       fill={isSelected ? '#22d3ee' : isHovered ? '#1c1917' : color}
+                      style={{ transition: 'fill 0.12s ease' }}
                       className="select-none"
                       onMouseEnter={() => setHoveredBranch(b.name)}
                       onMouseLeave={() => setHoveredBranch(null)}
@@ -910,20 +948,20 @@ export default function BranchMap({
                 x={tooltip.x - 6}
                 y={tooltip.y - 50}
                 width={210}
-                height={56}
-                rx={4}
-                fill="#292524"
-                stroke="#44403c"
+                height={62}
+                rx={8}
+                fill="#ffffff"
+                stroke="#e7e5e0"
                 strokeWidth={1}
+                filter="url(#tick-shadow)"
               />
               {tooltip.lines.map((line, i) => (
                 <text
                   key={i}
                   x={tooltip.x + 4}
                   y={tooltip.y - 33 + i * 16}
-                  fontSize={11}
-                  fontFamily="monospace"
-                  fill={i === 0 ? '#ef4444' : '#a8a29e'}
+                  fontSize={10}
+                  fill={i === 0 ? '#dc2626' : '#78716c'}
                 >
                   {line}
                 </text>
@@ -931,26 +969,52 @@ export default function BranchMap({
             </g>
           )}
 
+          {/* Tooltip for main-line merge nodes — shown above the tick */}
+          {hoveredMergeNode && (() => {
+            const { x, node: m } = hoveredMergeNode;
+            const label = m.prNumber ? `PR #${m.prNumber}` : m.sha.slice(0, 7);
+            const title = m.prTitle ?? '';
+            const hasTitle = title.length > 0;
+            const TW = 220;
+            const TH = hasTitle ? 44 : 30;
+            const tx = x - TW / 2;
+            const ty = mainY - TH - 14;
+            return (
+              <g style={{ pointerEvents: 'none' }}>
+                <rect x={tx} y={ty} width={TW} height={TH} rx={8}
+                  fill="#ffffff" stroke="#e7e5e0" strokeWidth={1}
+                  filter="url(#tick-shadow)" />
+                <text x={tx + 10} y={ty + 14} fontSize={10} fontWeight={600} fill="#1c1917">
+                  {label}{hasTitle ? ` · ${title.slice(0, 30)}${title.length > 30 ? '…' : ''}` : ''}
+                </text>
+                {hasTitle && (
+                  <text x={tx + 10} y={ty + 30} fontSize={10} fill="#a8a29e">
+                    {fmtLabelDate(m.date)}
+                  </text>
+                )}
+              </g>
+            );
+          })()}
+
           {/* Tooltip for PR commit SHAs — positioned below the tick */}
           {hoveredPRCommit && (() => {
             const { x, arcY, pr, commitIdx } = hoveredPRCommit;
             const sha = prCommits.get(pr.number)?.[commitIdx];
             const TW = 200;
-            const TH = 68;
             const tx = x - TW / 2;
             const ty = arcY + 14;
             return (
               <g style={{ pointerEvents: 'none' }}>
-                <rect x={tx} y={ty} width={TW} height={TH} rx={5}
-                  fill="#292524" stroke="#44403c" strokeWidth={1}
+                <rect x={tx} y={ty} width={TW} height={60} rx={8}
+                  fill="#ffffff" stroke="#e7e5e0" strokeWidth={1}
                   filter="url(#tick-shadow)" />
-                <text x={tx + 10} y={ty + 18} fontSize={11} fontWeight={600} fill="#22d3ee" fontFamily="monospace">
+                <text x={tx + 10} y={ty + 17} fontSize={10} fontWeight={600} fill="#1c1917">
                   {sha ?? `commit ${commitIdx + 1}`}
                 </text>
-                <text x={tx + 10} y={ty + 33} fontSize={10} fill="#a8a29e">
+                <text x={tx + 10} y={ty + 32} fontSize={10} fill="#78716c">
                   PR #{pr.number} · {pr.branchName.length > 22 ? pr.branchName.slice(0, 22) + '…' : pr.branchName}
                 </text>
-                <text x={tx + 10} y={ty + 48} fontSize={10} fill="#78716c">
+                <text x={tx + 10} y={ty + 47} fontSize={10} fill="#a8a29e">
                   @{pr.authorLogin} · merged {fmtLabelDate(pr.mergedAt)}
                 </text>
               </g>
@@ -980,8 +1044,9 @@ export default function BranchMap({
         )}
       </div>
 
-      {/* Fixed bottom chrome: scrollbar + zoom */}
-      <div className="fixed bottom-6 left-6 right-6 flex flex-col gap-2 z-50">
+      {/* Bottom chrome: scrollbar + zoom — absolute so it stays inside the map
+          container and respects visibility:hidden when the diff view is shown. */}
+      <div className="absolute bottom-6 left-6 right-6 flex flex-col gap-2 z-50">
 
         {/* Scrollbar + zoom row */}
         <div

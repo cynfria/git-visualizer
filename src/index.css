@@ -198,22 +198,18 @@ body {
   user-select: none;
 }
 
-/* ── Error panel slide-in animation ─────────────────────────────────────── */
-.error-panel-enter {
-  transform: translateX(110%);
-  opacity: 0;
+/* ── Error panel open/close animations ───────────────────────────────────── */
+@keyframes error-panel-in {
+  from { opacity: 0; transform: translateY(-6px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);    }
 }
-.error-panel-enter-active {
-  transform: translateX(0);
-  opacity: 1;
-  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+@keyframes error-panel-out {
+  from { opacity: 1; transform: translateY(0)    scale(1);    }
+  to   { opacity: 0; transform: translateY(-4px) scale(0.97); }
 }
-.error-panel-exit {
-  transform: translateX(0);
-  opacity: 1;
+.animate-error-panel-in {
+  animation: error-panel-in 0.2s cubic-bezier(0.34, 1.4, 0.64, 1) both;
 }
-.error-panel-exit-active {
-  transform: translateX(110%);
-  opacity: 0;
-  transition: transform 0.3s ease-in-out, opacity 0.3s ease-in-out;
+.animate-error-panel-out {
+  animation: error-panel-out 0.1s ease-in both;
 }

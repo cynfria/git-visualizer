@@ -1,8 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronDown, Check } from 'lucide-react';
 import BranchMapView from '../components/BranchMapView';
-import type { ViewMode } from '../components/BranchMapView';
 import DiffViewer from '../components/DiffViewer';
 import FolderPickerModal from './FolderPickerModal';
 import type { Branch, DirectCommit, MergeNode, MergedPR, OpenPR, GitHubInfo } from '../types';
@@ -24,14 +22,13 @@ function App() {
   const [view, setView] = useState<View>('landing');
   const [selectedBranch, setSelectedBranch] = useState<Branch | null>(null);
   const [showErrorPanel, setShowErrorPanel] = useState(false);
+  const [errorPanelClosing, setErrorPanelClosing] = useState(false);
   const [errorPanelTab, setErrorPanelTab] = useState<'active' | 'inactive'>('active');
   // scrollRequest.seq increments on each click so the same branch re-triggers the effect
   const [scrollRequest, setScrollRequest] = useState<{ branch: Branch; seq: number } | null>(null);
+  const [focusedErrorBranch, setFocusedErrorBranch] = useState<Branch | null>(null);
   const [mapUiReady, setMapUiReady] = useState(false);
   const hadMapDataRef = useRef(false);
-  const [mapView, setMapView] = useState<ViewMode>('time');
-  const [viewDropdownOpen, setViewDropdownOpen] = useState(false);
-  const viewDropdownRef = useRef<HTMLDivElement>(null);
   const [githubAvailable, setGithubAvailable] = useState(false);
   const [githubOwner, setGithubOwner] = useState<string | null>(null);
   const [githubRepo, setGithubRepo] = useState<string | null>(null);
@@ -40,6 +37,7 @@ function App() {
   // so DiffViewer can skip the main-side server start for the common case.
   const [prewarmedMainShots, setPrewarmedMainShots] = useState<(string | null)[] | null>(null);
   const prewarmedRef = useRef(false);
+  const [authSetupLoading, setAuthSetupLoading] = useState(false);
 
   async function loadRepo(path: string) {
     setLoading(true);
@@ -167,6 +165,7 @@ function App() {
     setMapUiReady(false);
     setPrewarmedMainShots(null);
     prewarmedRef.current = false;
+    setAuthSetupLoading(false);
   }, [repoPath]);
 
   // Pre-warm: start screenshotting main at '/' as soon as active branches arrive.
@@ -186,14 +185,6 @@ function App() {
     }).catch(() => { /* silent — DiffViewer will fall back to fresh generation */ });
   }, [repoPath, defaultBranch, branches.length]);
 
-  useEffect(() => {
-    if (!viewDropdownOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (!viewDropdownRef.current?.contains(e.target as Node)) setViewDropdownOpen(false);
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [viewDropdownOpen]);
 
   // ── Cmd+Shift+S: capture screenshots of main timeline + every branch detail ──
   useEffect(() => {
@@ -238,6 +229,16 @@ function App() {
     return () => window.removeEventListener('keydown', handler);
   }, [repoPath, repoName, branches]);
 
+  function closeErrorPanel() {
+    setErrorPanelClosing(true);
+    setTimeout(() => {
+      setShowErrorPanel(false);
+      setErrorPanelClosing(false);
+      setErrorPanelTab('active');
+      setFocusedErrorBranch(null);
+    }, 100);
+  }
+
   function handleBranchSelect(branch: Branch) {
     setSelectedBranch(branch);
     setView('diff');
@@ -251,7 +252,9 @@ function App() {
   function handleFocusOnMap(branch: Branch) {
     setSelectedBranch(null);
     setView('map');
+    setFocusedErrorBranch(branch);
     setScrollRequest(prev => ({ branch, seq: (prev?.seq ?? 0) + 1 }));
+    // panel stays open intentionally
   }
 
   function handleViewDiff() {
@@ -263,6 +266,24 @@ function App() {
   function handleBackToMap() {
     setSelectedBranch(null);
     setView('map');
+  }
+
+  // True when pre-warm finished but root route is auth-gated (all shots null)
+  const previewIsAuthGated =
+    prewarmedMainShots !== null && prewarmedMainShots.every(s => s === null);
+
+  async function handleAuthSetup() {
+    if (!repoPath) return;
+    setAuthSetupLoading(true);
+    try {
+      await invoke('open_preview_browser', { repoPath, branch: defaultBranch });
+    } catch (e) {
+      console.error('Auth setup failed:', e);
+    }
+    setAuthSetupLoading(false);
+    // Re-run pre-warm so updated auth is reflected in DiffViewer
+    prewarmedRef.current = false;
+    setPrewarmedMainShots(null);
   }
 
   function handleBackToLanding() {
@@ -316,11 +337,20 @@ function App() {
                   </button>
                 </div>
               )}
+              {(previewIsAuthGated || authSetupLoading) && (
+                <button
+                  onClick={handleAuthSetup}
+                  disabled={authSetupLoading}
+                  className="text-xs text-muted-foreground hover:text-foreground border border-border/50 rounded-full px-3 py-1 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  {authSetupLoading ? 'Log in and close Chrome...' : 'Authenticate Preview'}
+                </button>
+              )}
               {activeErrorBranches.length > 0 && (
                 <button
-                  onClick={() => setShowErrorPanel((o) => !o)}
-                  style={{ opacity: mapUiReady ? 1 : 0, transition: 'opacity 0.4s ease' }}
-                  className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 transition-colors ${
+                  onClick={() => { if (showErrorPanel) { closeErrorPanel(); } else { setShowErrorPanel(true); } }}
+                  style={{ opacity: mapUiReady ? 1 : 0, transition: 'opacity 0.4s ease, background-color 0.2s ease, border-color 0.2s ease' }}
+                  className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 ${
                     showErrorPanel
                       ? 'text-destructive border-destructive/40 bg-destructive/10'
                       : 'text-destructive border-destructive/20 bg-destructive/5 hover:bg-destructive/10'
@@ -331,40 +361,16 @@ function App() {
                 </button>
               )}
 
-              {/* View selector */}
-              <div className="relative" ref={viewDropdownRef}>
-                <button
-                  onClick={() => setViewDropdownOpen((o) => !o)}
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground border border-border rounded-full px-3 py-1 bg-card hover:bg-accent transition-colors"
-                >
-                  {mapView === 'time' ? 'By time' : mapView === 'status' ? 'By status' : 'By creator'}
-                  <ChevronDown className="w-3 h-3 shrink-0" />
-                </button>
-                {viewDropdownOpen && (
-                  <div className="absolute right-0 top-full mt-1.5 w-36 bg-card border border-border rounded-xl shadow-lg py-1 z-50">
-                    {(githubAvailable ? (['time', 'status', 'creator'] as ViewMode[]) : (['time', 'status'] as ViewMode[])).map((v) => (
-                      <button
-                        key={v}
-                        onClick={() => { setMapView(v); setViewDropdownOpen(false); }}
-                        className="w-full flex items-center justify-between px-3 py-2 text-xs text-foreground hover:bg-accent transition-colors"
-                      >
-                        {v === 'time' ? 'By time' : v === 'status' ? 'By status' : 'By creator'}
-                        {mapView === v && <Check className="w-3 h-3 shrink-0" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </header>
 
           {/* Branch errors floating panel */}
           {showErrorPanel && (
-            <div className="absolute top-[65px] right-6 z-50 w-80 bg-card border border-border rounded-2xl shadow-lg overflow-hidden">
+            <div className={`absolute top-[65px] right-6 z-50 w-80 bg-card border border-border rounded-2xl shadow-lg overflow-hidden ${errorPanelClosing ? 'animate-error-panel-out' : 'animate-error-panel-in'}`}>
               <div className="flex items-center justify-between px-4 py-3 border-b border-border/50">
                 <span className="text-sm font-medium text-foreground">Branch errors</span>
                 <button
-                  onClick={() => { setShowErrorPanel(false); setErrorPanelTab('active'); }}
+                  onClick={closeErrorPanel}
                   className="text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -388,29 +394,42 @@ function App() {
                 </button>
               </div>
               <div className="overflow-y-auto max-h-64">
-                {(errorPanelTab === 'active' ? activeErrorBranches : inactiveErrorBranches).map((b) => (
-                  <button
-                    key={b.name}
-                    onClick={() => { handleFocusOnMap(b); setShowErrorPanel(false); }}
-                    className="w-full flex items-start gap-3 px-4 py-3 border-b border-border/30 last:border-0 hover:bg-accent transition-colors text-left"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-foreground font-medium truncate">{b.name}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        {b.commitsAhead > 0 && `${b.commitsAhead} ahead`}
-                        {b.commitsAhead > 0 && b.commitsBehind > 0 && ', '}
-                        {b.commitsBehind > 0 && `${b.commitsBehind} behind`}
-                      </p>
-                    </div>
-                    <span className={`text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
-                      b.status === 'conflict-risk'
-                        ? 'bg-red-50 text-red-600'
-                        : 'bg-amber-50 text-amber-600'
-                    }`}>
-                      {b.status === 'conflict-risk' ? 'Conflict' : 'Stale'}
-                    </span>
-                  </button>
-                ))}
+                {(errorPanelTab === 'active' ? activeErrorBranches : inactiveErrorBranches).map((b) => {
+                  const isFocused = focusedErrorBranch?.name === b.name;
+                  return (
+                    <button
+                      key={b.name}
+                      onClick={() => handleFocusOnMap(b)}
+                      className={`w-full flex items-start gap-2 py-3 border-b border-border/30 last:border-0 hover:bg-accent transition-colors text-left ${
+                        isFocused
+                          ? b.status === 'conflict-risk'
+                            ? 'bg-red-50/60 dark:bg-red-900/10 px-4'
+                            : 'bg-amber-50/60 dark:bg-amber-900/10 px-4'
+                          : 'px-4'
+                      }`}
+                    >
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium truncate ${
+                          isFocused
+                            ? b.status === 'conflict-risk' ? 'text-destructive' : 'text-amber-600 dark:text-amber-400'
+                            : 'text-foreground'
+                        }`}>{b.name}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          {b.commitsAhead > 0 && `${b.commitsAhead} ahead`}
+                          {b.commitsAhead > 0 && b.commitsBehind > 0 && ', '}
+                          {b.commitsBehind > 0 && `${b.commitsBehind} behind`}
+                        </p>
+                      </div>
+                      <span className={`text-[10px] font-medium uppercase tracking-wide px-2 py-0.5 rounded-full shrink-0 mt-0.5 ${
+                        b.status === 'conflict-risk'
+                          ? 'bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400'
+                          : 'bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400'
+                      }`}>
+                        {b.status === 'conflict-risk' ? 'Conflict' : 'Stale'}
+                      </span>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -430,9 +449,10 @@ function App() {
               githubAvailable={githubAvailable}
               githubOwner={githubOwner}
               githubRepo={githubRepo}
-              view={mapView}
+              view="time"
               isLoading={mapLoading}
               scrollRequest={scrollRequest}
+              focusedErrorBranch={focusedErrorBranch}
             />
           </div>
         </div>

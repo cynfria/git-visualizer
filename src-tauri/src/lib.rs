@@ -496,7 +496,8 @@ fn normalize_name(s: &str) -> String {
 fn all_page_routes(repo_path: &Path) -> Vec<String> {
     let Ok(output) = git::cli::run(
         repo_path,
-        &["ls-tree", "-r", "--name-only", "HEAD", "--", "app", "pages"],
+        &["ls-tree", "-r", "--name-only", "HEAD", "--",
+          "app", "pages", "src/app", "src/pages", "src/routes"],
     ) else {
         return Vec::new();
     };
@@ -521,25 +522,44 @@ fn fuzzy_matched_routes<'a>(changed_files: &[&str], all_routes: &'a [String]) ->
     for &file in changed_files {
         if file_to_route(file).is_some() { continue; } // already handled directly
 
-        let base = std::path::Path::new(file)
+        // Build candidate names to match against route segments:
+        //   (a) file stem — catches component files e.g. TarotCard.tsx → "tarotcard"
+        //   (b) intermediate directory segments (skip first and last) — catches
+        //       content/data/public changes e.g. content/tarot/card.md → "tarot"
+        let mut names: Vec<String> = Vec::new();
+
+        let stem = std::path::Path::new(file)
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("");
-        if base.len() < 5 { continue; } // skip very short names to avoid noise
+        if stem.len() >= 5 {
+            names.push(normalize_name(stem));
+        }
 
-        let norm_base = normalize_name(base);
+        let parts: Vec<&str> = file.split('/').collect();
+        // parts[0] = top-level dir (content/public/app/etc), parts[last] = filename
+        // Intermediate parts are meaningful directory names that often mirror routes
+        if parts.len() > 2 {
+            for seg in &parts[1..parts.len() - 1] {
+                if seg.len() >= 3 && !seg.starts_with('(') && !seg.starts_with('[') {
+                    names.push(normalize_name(seg));
+                }
+            }
+        }
+
+        if names.is_empty() { continue; }
 
         for route in all_routes {
             if seen.contains(route.as_str()) { continue; }
-            // Match if any non-empty path segment normalizes to the component name,
-            // or if the component name starts with the segment (e.g. DesignOnboardingPanel → design-onboarding)
             let hit = route
                 .split('/')
                 .filter(|s| !s.is_empty())
                 .any(|seg| {
                     let norm_seg = normalize_name(seg);
-                    norm_seg == norm_base
-                        || (norm_seg.len() >= 8 && norm_base.starts_with(&norm_seg))
+                    names.iter().any(|n| {
+                        norm_seg == *n
+                            || (norm_seg.len() >= 8 && n.starts_with(&norm_seg))
+                    })
                 });
             if hit {
                 seen.insert(route.as_str());
@@ -570,7 +590,8 @@ fn debug_diff_files(repo_path: String, branch: String, base_branch: String) -> S
 ///   app/api/users/route.ts                             →  None (api skipped)
 fn app_dir_to_route(file: &str) -> Option<String> {
     if file_to_route(file).is_some() { return None; } // already a page file
-    let rest = file.strip_prefix("app/")?;
+    let rest = file.strip_prefix("app/")
+        .or_else(|| file.strip_prefix("src/app/"))?;
     let slash_pos = rest.find('/')?; // must be inside a subdirectory
     let first_seg = &rest[..slash_pos];
     // Skip route groups, dynamic segs, parallel routes, private dirs, and api
@@ -625,12 +646,47 @@ fn get_changed_routes(
         }
     }
 
-    // Pass 3: fuzzy-match non-page filenames against all routes in the repo
+    // Pass 3: fuzzy-match filenames and directory segments against all repo routes.
+    // This catches content/data/public changes: content/tarot/card.md → /tarot
     let all_routes = all_page_routes(path);
     for r in fuzzy_matched_routes(&changed_files, &all_routes) {
         if seen.insert(r.clone()) {
             routes.push(r.clone());
         }
+    }
+
+    // Cap at 4 routes to avoid starting excessive dev servers
+    if routes.len() > 4 { routes.truncate(4); }
+
+    // Pass 4: fallback — if nothing was detected, sample the repo's top-level
+    // routes so broad changes (shared components, utils, styles) still get
+    // multiple screenshots instead of just '/'.
+    if routes.is_empty() {
+        // Routes likely behind auth or not useful to screenshot
+        let skip = ["login", "signin", "signup", "register", "auth", "logout",
+                    "callback", "verify", "reset", "forgot", "404", "500",
+                    "error", "not-found", "api", "onboarding"];
+
+        // Collect top-level routes only (one non-empty path segment)
+        let mut candidates: Vec<&String> = all_routes
+            .iter()
+            .filter(|r| {
+                let segs: Vec<&str> = r.split('/').filter(|s| !s.is_empty()).collect();
+                if segs.len() != 1 { return false; }
+                let lower = r.to_lowercase();
+                !skip.iter().any(|k| lower.contains(k))
+            })
+            .collect();
+
+        // Sort so shorter names (likely more important pages) come first
+        candidates.sort_by_key(|r| r.len());
+
+        let mut fallback = vec!["/".to_string()];
+        for route in candidates {
+            if fallback.len() >= 4 { break; }
+            fallback.push(route.clone());
+        }
+        return Ok(fallback);
     }
 
     Ok(routes)
@@ -640,8 +696,10 @@ fn get_changed_routes(
 fn file_to_route(file: &str) -> Option<String> {
     const PAGE_EXTS: &[&str] = &["page.tsx", "page.jsx", "page.ts", "page.js"];
 
-    // Next.js App Router: app/**/page.{tsx,jsx,ts,js}
-    if let Some(rest) = file.strip_prefix("app/") {
+    // Next.js App Router: app/**/page.{tsx,jsx,ts,js}  (also src/app/**)
+    let app_rest = file.strip_prefix("app/")
+        .or_else(|| file.strip_prefix("src/app/"));
+    if let Some(rest) = app_rest {
         for &suffix in PAGE_EXTS {
             if rest == suffix {
                 return Some("/".to_string());
@@ -652,8 +710,10 @@ fn file_to_route(file: &str) -> Option<String> {
         }
     }
 
-    // Next.js Pages Router: pages/**/*.{tsx,jsx,ts,js}
-    if let Some(rest) = file.strip_prefix("pages/") {
+    // Next.js Pages Router: pages/**/*.{tsx,jsx,ts,js}  (also src/pages/**)
+    let pages_rest = file.strip_prefix("pages/")
+        .or_else(|| file.strip_prefix("src/pages/"));
+    if let Some(rest) = pages_rest {
         if rest.starts_with('_') || rest.starts_with("api/") {
             return None;
         }
@@ -746,6 +806,199 @@ async fn generate_preview_routes(repo_path: String, branch: String, port: u16, p
         .map_err(|e| format!("Spawn error: {e}"))?
 }
 
+/// Opens a visible Chrome window pointed at the branch's dev server so the user
+/// can authenticate. The session is stored in `~/.git-viz-preview-auth/setup`
+/// and is automatically seeded into CDP screenshot profiles on the next run.
+fn run_open_browser_blocking(repo_path: String, branch: String, port: u16) -> Result<(), String> {
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    let repo = Path::new(&repo_path);
+
+    let slug: String = branch.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect();
+    let preview_dir = std::env::temp_dir().join(format!("git-viz-preview-{slug}-{port}"));
+
+    let _ = std::fs::remove_dir_all(&preview_dir);
+    std::fs::create_dir_all(&preview_dir)
+        .map_err(|e| format!("Failed to create preview dir: {e}"))?;
+
+    let archive_path = std::env::temp_dir().join(format!("git-viz-archive-{port}.tar"));
+    let _ = std::fs::remove_file(&archive_path);
+
+    let arch_out = std::process::Command::new("git")
+        .args(["-C", &repo_path, "archive", "--format=tar", &branch])
+        .output()
+        .map_err(|e| format!("git archive failed to start: {e}"))?;
+
+    if !arch_out.status.success() {
+        let _ = std::fs::remove_dir_all(&preview_dir);
+        return Err(format!(
+            "git archive failed for branch '{}': {}",
+            branch,
+            String::from_utf8_lossy(&arch_out.stderr).trim()
+        ));
+    }
+
+    std::fs::write(&archive_path, &arch_out.stdout)
+        .map_err(|e| format!("Failed to write archive: {e}"))?;
+
+    let tar_out = std::process::Command::new("tar")
+        .args(["-xf", archive_path.to_str().unwrap_or(""), "-C", preview_dir.to_str().unwrap_or("")])
+        .output()
+        .map_err(|e| format!("tar failed to start: {e}"))?;
+
+    let _ = std::fs::remove_file(&archive_path);
+
+    if !tar_out.status.success() {
+        let _ = std::fs::remove_dir_all(&preview_dir);
+        return Err(format!(
+            "tar extraction failed: {}",
+            String::from_utf8_lossy(&tar_out.stderr).trim()
+        ));
+    }
+
+    if !preview_dir.join("package.json").exists() {
+        let _ = std::fs::remove_dir_all(&preview_dir);
+        return Err("No package.json — not a Node.js project".to_string());
+    }
+
+    for name in &[
+        ".env", ".env.local", ".env.development", ".env.development.local",
+        ".env.production", ".env.production.local",
+    ] {
+        let src = repo.join(name);
+        if src.exists() {
+            let _ = std::fs::copy(&src, preview_dir.join(name));
+        }
+    }
+
+    let pm = if preview_dir.join("bun.lockb").exists() { "bun" }
+        else if preview_dir.join("pnpm-lock.yaml").exists() { "pnpm" }
+        else if preview_dir.join("yarn.lock").exists() { "yarn" }
+        else { "npm" };
+
+    let main_modules = repo.join("node_modules");
+    if main_modules.exists() {
+        let _ = std::fs::remove_dir_all(main_modules.join(".vite"));
+        let link = preview_dir.join("node_modules");
+        if !link.exists() {
+            let _ = std::os::unix::fs::symlink(&main_modules, &link);
+        }
+    }
+
+    let port_str = port.to_string();
+    let pm_args: Vec<&str> = match pm {
+        "yarn" => vec!["dev", "--port", &port_str],
+        "pnpm" => vec!["run", "dev", "--port", &port_str],
+        _      => vec!["run", "dev", "--", "--port", &port_str],
+    };
+
+    let log_path = std::env::temp_dir().join(format!("git-viz-dev-{port}.log"));
+    let (stdout_sink, stderr_sink) = match std::fs::File::create(&log_path) {
+        Ok(f) => {
+            let f2 = f.try_clone().unwrap_or_else(|_| std::fs::File::create("/dev/null").unwrap());
+            (Stdio::from(f), Stdio::from(f2))
+        }
+        Err(_) => (Stdio::null(), Stdio::null()),
+    };
+
+    let mut server = std::process::Command::new(pm)
+        .args(&pm_args)
+        .env("PORT", &port_str)
+        .current_dir(&preview_dir)
+        .stdout(stdout_sink)
+        .stderr(stderr_sink)
+        .spawn()
+        .map_err(|e| {
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            format!("Failed to start dev server ({pm}): {e}")
+        })?;
+
+    let requested_url = format!("http://localhost:{port}");
+    let start = Instant::now();
+    let live_url: Option<String> = loop {
+        if start.elapsed() > Duration::from_secs(90) { break None; }
+
+        if let Ok(Some(_)) = server.try_wait() {
+            let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+            let tail = log.lines().rev().take(15)
+                .collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
+            let _ = std::fs::remove_file(&log_path);
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            return Err(format!("Dev server crashed.\nLog:\n{tail}"));
+        }
+
+        std::thread::sleep(Duration::from_millis(500));
+
+        if ureq::get(&requested_url).call().is_ok() {
+            break Some(requested_url.clone());
+        }
+
+        let log = std::fs::read_to_string(&log_path).unwrap_or_default();
+        if let Some(actual) = parse_localhost_url(&log) {
+            if ureq::get(&actual).call().is_ok() {
+                break Some(actual);
+            }
+        }
+    };
+
+    let _ = std::fs::remove_file(&log_path);
+
+    let url = match live_url {
+        Some(u) => u,
+        None => {
+            let _ = server.kill();
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            return Err(format!("Dev server did not respond within 90s (tried port {port})"));
+        }
+    };
+
+    let chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+    if !Path::new(chrome).exists() {
+        let _ = server.kill();
+        let _ = std::fs::remove_dir_all(&preview_dir);
+        return Err("Google Chrome not found — install Chrome to generate previews".to_string());
+    }
+
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let auth_dir = format!("{home}/.git-viz-preview-auth/setup");
+
+    let mut chrome_proc = std::process::Command::new(chrome)
+        .args([
+            "--no-sandbox",
+            "--disable-extensions",
+            "--disable-default-apps",
+            "--window-size=1440,900",
+            &format!("--user-data-dir={auth_dir}"),
+            &url,
+        ])
+        .spawn()
+        .map_err(|e| {
+            let _ = server.kill();
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            format!("Failed to launch Chrome: {e}")
+        })?;
+
+    // Block until the user closes Chrome
+    let _ = chrome_proc.wait();
+
+    let _ = server.kill();
+    let _ = std::fs::remove_dir_all(&preview_dir);
+    Ok(())
+}
+
+/// Open a visible Chrome window for the given branch so the user can log in.
+/// Returns when Chrome is closed. On the next preview run, the CDP script will
+/// seed its profile from `~/.git-viz-preview-auth/setup`.
+#[tauri::command(rename_all = "camelCase")]
+async fn open_preview_browser(repo_path: String, branch: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || run_open_browser_blocking(repo_path, branch, 3493))
+        .await
+        .map_err(|e| format!("Spawn error: {e}"))?
+}
+
 /// Node.js script that uses Chrome DevTools Protocol to screenshot a URL.
 ///
 /// Unlike `chrome --screenshot` (which fires at the browser `load` event, before
@@ -779,6 +1032,15 @@ const chrome = spawn(chromePath, [
   'about:blank',
 ], { stdio: 'ignore' });
 chrome.on('error', err => { process.stderr.write('Chrome error: ' + err.message + '\n'); process.exit(1); });
+let chromeDead = false;
+let chromeExitError = null;
+chrome.on('exit', (code, signal) => {
+  if (!chromeDead) {
+    chromeDead = true;
+    chromeExitError = new Error('Chrome exited unexpectedly (code=' + code + ', signal=' + signal + ')');
+    process.stderr.write(chromeExitError.message + '\n');
+  }
+});
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -793,6 +1055,7 @@ function httpGet(url) {
 async function waitForTarget(timeout) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
+    if (chromeDead) throw chromeExitError || new Error('Chrome exited before CDP was ready');
     try {
       const data = await httpGet(`http://localhost:${CDP_PORT}/json/list`);
       const targets = JSON.parse(data);
@@ -895,12 +1158,14 @@ function wsConnect(wsUrl) {
     const ws = {
       send(method, params) {
         return new Promise((res, rej) => {
+          if (chromeDead) { return rej(chromeExitError || new Error('Chrome is not running')); }
           const id = nextId++;
           handlers.set(id, { resolve: res, reject: rej });
           sendFrame(JSON.stringify({ id, method, params: params || {} }));
+          const timeoutMs = method === 'Runtime.evaluate' ? 10000 : 30000;
           setTimeout(() => {
             if (handlers.has(id)) { handlers.delete(id); rej(new Error('CDP timeout: ' + method)); }
-          }, 30000);
+          }, timeoutMs);
         });
       },
       on(fn) { listeners.push(fn); },
@@ -908,6 +1173,13 @@ function wsConnect(wsUrl) {
     };
 
     socket.on('error', err => { if (!wsOpen) reject(err); });
+    socket.on('close', () => {
+      if (chromeDead) {
+        const err = chromeExitError || new Error('Chrome connection closed');
+        handlers.forEach(h => h.reject(err));
+        handlers.clear();
+      }
+    });
   });
 }
 
@@ -947,9 +1219,11 @@ async function main() {
 
       const started = Date.now();
       while (Date.now() - started < MAX_MS) {
+        if (chromeDead) throw chromeExitError || new Error('Chrome exited during page load');
         await sleep(250);
         if (inFlight.size === 0 && Date.now() - lastActivity >= IDLE_MS) break;
       }
+      if (chromeDead) throw chromeExitError || new Error('Chrome exited during page load');
 
       // Try to click an entry-point button (e.g. "START") to reveal the main content.
       // Matches buttons/links whose full visible text is a single common CTA word.
@@ -965,13 +1239,15 @@ async function main() {
         returnByValue: true,
       });
 
-      if (clickResult && clickResult.result && clickResult.result.value != null) {
+      const didClick = clickResult && clickResult.result && clickResult.result.value != null;
+      if (didClick) {
         // Wait for post-click navigation + animations to settle
         await sleep(300);
         inFlight.clear();
         lastActivity = Date.now();
         const postClick = Date.now();
         while (Date.now() - postClick < 12000) {
+          if (chromeDead) throw chromeExitError || new Error('Chrome exited during page load');
           await sleep(250);
           if (inFlight.size === 0 && Date.now() - lastActivity >= IDLE_MS) break;
         }
@@ -995,6 +1271,63 @@ async function main() {
 }
 main();
 "#;
+
+/// Recursively copy `src` dir into `dst`, skipping symlinks (e.g. Chrome's
+/// SingletonLock) and known large cache directories that aren't needed for
+/// preserving web-app session state.
+fn copy_dir_all(src: &Path, dst: &Path) -> std::io::Result<()> {
+    const SKIP: &[&str] = &[
+        "Cache", "Code Cache", "GPUCache", "ShaderCache", "Crashpad",
+        "CrashpadMetrics-active.pma", "BrowserMetrics", "GrShaderCache",
+    ];
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if SKIP.contains(&name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            let _ = copy_dir_all(&entry.path(), &dst.join(&name));
+        } else if ty.is_file() {
+            // ty.is_symlink() is false here because is_file() is false for symlinks
+            let _ = std::fs::copy(entry.path(), dst.join(&name));
+        }
+        // Symlinks (SingletonLock, etc.) are skipped — is_dir and is_file both false
+    }
+    Ok(())
+}
+
+/// Returns true if the project at `dir` uses hash-based client-side routing
+/// (React HashRouter, Vue createWebHashHistory, etc.). For these apps all paths
+/// serve the same HTML — routes live in the URL fragment, e.g. `/#/tarot`.
+fn uses_hash_routing(dir: &Path) -> bool {
+    const PATTERNS: &[&str] = &[
+        "createHashRouter",
+        "HashRouter",
+        "createHashHistory",
+        "createWebHashHistory",  // Vue Router
+        "useHash: true",
+        "\"hash\"",              // generic router hash mode config
+        "'hash'",
+    ];
+    let candidates = [
+        "src/main.tsx", "src/main.ts", "src/main.jsx", "src/main.js",
+        "src/App.tsx",  "src/App.ts",  "src/App.jsx",  "src/App.js",
+        "src/router.ts", "src/router.tsx", "src/router/index.ts", "src/router/index.tsx",
+        "src/routes.ts", "src/routes.tsx",
+        "app/router.ts", "app/router.tsx",
+    ];
+    for rel in &candidates {
+        if let Ok(content) = std::fs::read_to_string(dir.join(rel)) {
+            if PATTERNS.iter().any(|p| content.contains(p)) {
+                return true;
+            }
+        }
+    }
+    false
+}
 
 /// Blocking core: starts a dev server for `branch`, screenshots each `path` in
 /// sequence via the CDP script, and returns one base64 data URL per path.
@@ -1256,11 +1589,39 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
     }
     let node_bin = node_bin.unwrap();
 
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    let cdp_port_num = port + 1000;
+
+    // Use a fresh temp dir for each Chrome instance — guarantees no stale
+    // SingletonLock/SingletonCookie symlinks from previous crashed sessions.
+    let temp_profile = std::env::temp_dir().join(format!("git-viz-chrome-{cdp_port_num}"));
+    let _ = std::fs::remove_dir_all(&temp_profile);
+
+    // Copy the full auth session profile (cookies, localStorage, IndexedDB, etc.)
+    // so logged-in state carries over. copy_dir_all skips symlinks automatically,
+    // so SingletonLock is never transferred to the fresh temp dir.
+    let shared_auth = Path::new(&home).join(".git-viz-preview-auth/setup");
+    if shared_auth.exists() {
+        let _ = copy_dir_all(&shared_auth, &temp_profile);
+    } else {
+        let _ = std::fs::create_dir_all(&temp_profile);
+    }
+
+    // Detect hash-based routing (e.g. React Router HashRouter, Vue createWebHashHistory).
+    // These apps serve the same HTML at every path; routes live in the URL fragment (#/tarot).
+    let hash_routing = uses_hash_routing(&preview_dir);
+
     // Build the full URL for each requested path.
     let nav_paths = if paths.is_empty() { vec!["/".to_string()] } else { paths };
     let full_urls: Vec<String> = nav_paths.iter().map(|p| {
         let p = if p.starts_with('/') { p.as_str() } else { "/" };
-        if p == "/" { url.clone() } else { format!("{url}{p}") }
+        if p == "/" {
+            url.clone()
+        } else if hash_routing {
+            format!("{url}/#{p}")   // e.g. http://localhost:3492/#/tarot
+        } else {
+            format!("{url}{p}")     // e.g. http://localhost:3492/tarot
+        }
     }).collect();
 
     let urls_json = serde_json::to_string(&full_urls)
@@ -1305,13 +1666,14 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
                 let png = out_dir.join(format!("{i}.png"));
                 if png.exists() {
                     match std::fs::read(&png) {
-                        Ok(bytes) => {
+                        Ok(bytes) if !bytes.is_empty() => {
                             let _ = std::fs::remove_file(&png);
                             results.push(format!(
                                 "data:image/png;base64,{}",
                                 base64::engine::general_purpose::STANDARD.encode(&bytes)
                             ));
                         }
+                        Ok(_) => results.push(String::new()), // 0-byte = skip
                         Err(_) => results.push(String::new()),
                     }
                 } else {
@@ -1431,6 +1793,7 @@ pub fn run() {
             get_recent_log,
             generate_preview,
             generate_preview_routes,
+            open_preview_browser,
             get_changed_routes,
             debug_diff_files,
         ])

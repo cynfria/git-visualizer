@@ -21,6 +21,7 @@ interface Props {
   view?: ViewMode;
   isLoading?: boolean;
   scrollRequest?: { branch: Branch; seq: number } | null;
+  focusedErrorBranch?: Branch | null;
 }
 
 export default function BranchMapView({
@@ -39,6 +40,7 @@ export default function BranchMapView({
   view = 'time',
   isLoading = false,
   scrollRequest,
+  focusedErrorBranch,
 }: Props) {
   // Determine active vs inactive error branches
   const openPRBranchNames = new Set(openPRs.map(p => p.branchName));
@@ -82,6 +84,7 @@ export default function BranchMapView({
             inactiveErrorBranches={inactiveErrorBranches}
             isLoading={isLoading}
             scrollRequest={scrollRequest}
+            focusedErrorBranch={focusedErrorBranch}
           />
         </div>
       ) : (

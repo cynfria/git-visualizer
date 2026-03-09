@@ -29,8 +29,10 @@ function ComparisonRow({
   branchSrc,
   mainTitle,
   branchTitle,
-  loading,
-  error,
+  mainLoading,
+  branchLoading,
+  mainError,
+  branchError,
 }: {
   route: string;
   showRouteLabel: boolean;
@@ -38,8 +40,10 @@ function ComparisonRow({
   branchSrc: string | null;
   mainTitle: string;
   branchTitle: string;
-  loading: boolean;
-  error: string | null;
+  mainLoading: boolean;
+  branchLoading: boolean;
+  mainError: string | null;
+  branchError: string | null;
 }) {
   return (
     <div className="flex flex-col gap-2">
@@ -49,8 +53,8 @@ function ComparisonRow({
         </span>
       )}
       <div className="flex gap-4">
-        <PreviewPanel title={mainTitle} src={mainSrc} loading={loading} error={error} />
-        <PreviewPanel title={branchTitle} src={branchSrc} loading={loading} error={error} />
+        <PreviewPanel title={mainTitle} src={mainSrc} loading={mainLoading} error={mainError} />
+        <PreviewPanel title={branchTitle} src={branchSrc} loading={branchLoading} error={branchError} />
       </div>
     </div>
   );
@@ -143,10 +147,27 @@ export default function DiffViewer({
   const [mainError, setMainError] = useState<string | null>(null);
   const [branchError, setBranchError] = useState<string | null>(null);
 
+  const [authSetupLoading, setAuthSetupLoading] = useState(false);
+  const [showOutOfDateTooltip, setShowOutOfDateTooltip] = useState(false);
+
+  // Close out-of-date tooltip on outside click
+  useEffect(() => {
+    if (!showOutOfDateTooltip) return;
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Element;
+      if (!target.closest('[data-ood-tooltip]')) setShowOutOfDateTooltip(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showOutOfDateTooltip]);
+
   // Generation counter: prevents React StrictMode double-invocation races.
   // If a newer call starts while an older one is still awaiting Rust, the older
   // call checks this ref after each await and bails if it's been superseded.
   const genRef = useRef(0);
+  // StrictMode fires effects twice within ~10ms. Deduplicate rapid calls so
+  // both preview runs don't race on the same temp directory and corrupt it.
+  const lastPreviewStartRef = useRef(0);
 
   useEffect(() => {
     generatePreviews();
@@ -238,6 +259,9 @@ export default function DiffViewer({
   }, [repoPath, branch.name, defaultBranch]);
 
   async function generatePreviews() {
+    const now = Date.now();
+    if (now - lastPreviewStartRef.current < 50) return;
+    lastPreviewStartRef.current = now;
     const gen = ++genRef.current;
 
     setMainShots([]);
@@ -314,6 +338,24 @@ export default function DiffViewer({
 
   const isOutOfDate = branch.commitsBehind > 0;
   const multiRoute = routes.length > 1;
+
+  // Show auth button when loading is done but all shots are null (auth-gated redirects)
+  const loadingDone = !mainLoading && !branchLoading;
+  const showAuthButton =
+    loadingDone && !mainError && !branchError &&
+    mainShots.length > 0 && mainShots.every(s => s === null) &&
+    branchShots.length > 0 && branchShots.every(s => s === null);
+
+  async function handleAuthSetup() {
+    setAuthSetupLoading(true);
+    try {
+      await invoke('open_preview_browser', { repoPath, branch: branch.name });
+    } catch (e) {
+      console.error('Auth setup failed:', e);
+    }
+    setAuthSetupLoading(false);
+    generatePreviews();
+  }
 
   const renderSummary = () => {
     if (summaryLoading) {
@@ -424,28 +466,59 @@ export default function DiffViewer({
           ← Back
         </button>
         <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1">
-          <h1 className={`text-base font-medium ${
-            branch.status === 'conflict-risk' ? 'text-destructive' :
-            branch.status === 'stale' ? 'text-amber-600 dark:text-amber-400' :
-            'text-foreground'
-          }`}>
+          <h1 className="text-base font-medium text-foreground">
             {branch.name}
           </h1>
-          {(branch.status === 'conflict-risk' || branch.status === 'stale') && (
-            <span className={`text-[10px] uppercase tracking-wide font-medium px-2 py-0.5 rounded-full ${
-              branch.status === 'conflict-risk'
-                ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
-                : 'bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400'
-            }`}>
-              {branch.status === 'conflict-risk' ? 'conflict' : 'stale'}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-4">
           {isOutOfDate && (
-            <span className="flex items-center gap-1.5 text-sm text-destructive">
-              ⚠ Branch out of date ({branch.commitsBehind} behind)
-            </span>
+            <div className="relative" data-ood-tooltip>
+              <button
+                onClick={() => setShowOutOfDateTooltip(o => !o)}
+                className={`flex items-center gap-1.5 text-xs border rounded-full px-3 py-1 transition-colors ${
+                  showOutOfDateTooltip
+                    ? 'text-destructive border-destructive/40 bg-destructive/10'
+                    : 'text-destructive border-destructive/20 bg-destructive/5 hover:bg-destructive/10'
+                }`}
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-destructive shrink-0" />
+                {branch.commitsBehind} behind {defaultBranch}
+              </button>
+              {showOutOfDateTooltip && (
+                <div className="absolute top-full right-0 mt-2 w-72 bg-card border border-border rounded-xl shadow-lg p-4 z-50 animate-error-panel-in">
+                  <p className="text-xs font-medium text-foreground mb-1">Branch out of date</p>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    {branch.commitsBehind} new change{branch.commitsBehind !== 1 ? 's' : ''} have landed on{' '}
+                    <span className="font-mono text-foreground">{defaultBranch}</span> since this branch was created
+                    {branch.divergedFromDate && (
+                      <> on {new Date(branch.divergedFromDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</>
+                    )}.
+                    {' '}Updating keeps your work in sync and prevents conflicts later.
+                  </p>
+                  {branch.mergeable === false && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mb-3">
+                      This branch has conflicts with {defaultBranch} — you may need help resolving them before merging.
+                    </p>
+                  )}
+                  <p className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium mb-1.5">Run in your terminal</p>
+                  <p className="text-xs text-foreground font-mono bg-muted rounded-lg px-3 py-2 select-all">
+                    git rebase {defaultBranch}
+                  </p>
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    This replays your changes on top of the latest {defaultBranch}.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+          {(showAuthButton || authSetupLoading) && (
+            <button
+              onClick={handleAuthSetup}
+              disabled={authSetupLoading}
+              className="text-sm text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {authSetupLoading ? 'Log in and close Chrome to continue' : 'Authenticate Preview'}
+            </button>
           )}
         </div>
       </header>
@@ -489,8 +562,10 @@ export default function DiffViewer({
                   branchTitle={branch.name}
                   mainSrc={mainShots[i] ?? null}
                   branchSrc={branchShots[i] ?? null}
-                  loading={mainLoading && branchLoading}
-                  error={mainError ?? branchError}
+                  mainLoading={mainLoading}
+                  branchLoading={branchLoading}
+                  mainError={mainError}
+                  branchError={branchError}
                 />
               ))}
             </div>
