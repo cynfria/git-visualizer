@@ -658,37 +658,6 @@ fn get_changed_routes(
     // Cap at 4 routes to avoid starting excessive dev servers
     if routes.len() > 4 { routes.truncate(4); }
 
-    // Pass 4: fallback — if nothing was detected, sample the repo's top-level
-    // routes so broad changes (shared components, utils, styles) still get
-    // multiple screenshots instead of just '/'.
-    if routes.is_empty() {
-        // Routes likely behind auth or not useful to screenshot
-        let skip = ["login", "signin", "signup", "register", "auth", "logout",
-                    "callback", "verify", "reset", "forgot", "404", "500",
-                    "error", "not-found", "api", "onboarding"];
-
-        // Collect top-level routes only (one non-empty path segment)
-        let mut candidates: Vec<&String> = all_routes
-            .iter()
-            .filter(|r| {
-                let segs: Vec<&str> = r.split('/').filter(|s| !s.is_empty()).collect();
-                if segs.len() != 1 { return false; }
-                let lower = r.to_lowercase();
-                !skip.iter().any(|k| lower.contains(k))
-            })
-            .collect();
-
-        // Sort so shorter names (likely more important pages) come first
-        candidates.sort_by_key(|r| r.len());
-
-        let mut fallback = vec!["/".to_string()];
-        for route in candidates {
-            if fallback.len() >= 4 { break; }
-            fallback.push(route.clone());
-        }
-        return Ok(fallback);
-    }
-
     Ok(routes)
 }
 
@@ -789,9 +758,9 @@ fn app_route_to_url(path: &str) -> Option<String> {
 
 /// Screenshot a single path (convenience wrapper around `generate_preview_routes`).
 #[tauri::command(rename_all = "camelCase")]
-async fn generate_preview(repo_path: String, branch: String, port: u16, path: Option<String>) -> Result<String, String> {
+async fn generate_preview(repo_path: String, branch: String, fallback_sha: Option<String>, port: u16, path: Option<String>) -> Result<String, String> {
     let paths = vec![path.unwrap_or_else(|| "/".to_string())];
-    let mut results = tauri::async_runtime::spawn_blocking(move || run_previews_blocking(repo_path, branch, port, paths))
+    let mut results = tauri::async_runtime::spawn_blocking(move || run_previews_blocking(repo_path, branch, fallback_sha, port, paths))
         .await
         .map_err(|e| format!("Spawn error: {e}"))??;
     results.pop().filter(|s| !s.is_empty()).ok_or_else(|| "No screenshot generated".to_string())
@@ -800,8 +769,8 @@ async fn generate_preview(repo_path: String, branch: String, port: u16, path: Op
 /// Screenshot multiple paths in a single server startup — one data URL per path.
 /// Empty-string entries indicate a screenshot failure for that specific route.
 #[tauri::command(rename_all = "camelCase")]
-async fn generate_preview_routes(repo_path: String, branch: String, port: u16, paths: Vec<String>) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || run_previews_blocking(repo_path, branch, port, paths))
+async fn generate_preview_routes(repo_path: String, branch: String, fallback_sha: Option<String>, port: u16, paths: Vec<String>) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || run_previews_blocking(repo_path, branch, fallback_sha, port, paths))
         .await
         .map_err(|e| format!("Spawn error: {e}"))?
 }
@@ -1206,7 +1175,7 @@ async function main() {
       }
     });
 
-    const IDLE_MS = 2000, MAX_MS = 30000;
+    const IDLE_MS = 1000, MAX_MS = 30000;
     const { join } = require('path');
 
     for (let i = 0; i < urls.length; i++) {
@@ -1252,8 +1221,6 @@ async function main() {
           if (inFlight.size === 0 && Date.now() - lastActivity >= IDLE_MS) break;
         }
         await sleep(1200);
-      } else {
-        await sleep(400);
       }
 
       const shot = await ws.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
@@ -1332,7 +1299,7 @@ fn uses_hash_routing(dir: &Path) -> bool {
 /// Blocking core: starts a dev server for `branch`, screenshots each `path` in
 /// sequence via the CDP script, and returns one base64 data URL per path.
 /// Empty strings indicate that a particular screenshot failed.
-fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Vec<String>) -> Result<Vec<String>, String> {
+fn run_previews_blocking(repo_path: String, branch: String, fallback_sha: Option<String>, port: u16, paths: Vec<String>) -> Result<Vec<String>, String> {
     use std::process::Stdio;
     use std::time::{Duration, Instant};
     use base64::Engine;
@@ -1359,19 +1326,36 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
     let archive_path = std::env::temp_dir().join(format!("git-viz-archive-{port}.tar"));
     let _ = std::fs::remove_file(&archive_path);
 
-    let arch_out = std::process::Command::new("git")
+    let primary = std::process::Command::new("git")
         .args(["-C", &repo_path, "archive", "--format=tar", &branch])
         .output()
         .map_err(|e| format!("git archive failed to start: {e}"))?;
 
-    if !arch_out.status.success() {
+    let arch_out = if primary.status.success() {
+        primary
+    } else if let Some(ref sha) = fallback_sha {
+        let fallback = std::process::Command::new("git")
+            .args(["-C", &repo_path, "archive", "--format=tar", sha])
+            .output()
+            .map_err(|e| format!("git archive failed to start: {e}"))?;
+        if fallback.status.success() {
+            fallback
+        } else {
+            let _ = std::fs::remove_dir_all(&preview_dir);
+            return Err(format!(
+                "git archive failed for branch '{}': {}",
+                branch,
+                String::from_utf8_lossy(&primary.stderr).trim()
+            ));
+        }
+    } else {
         let _ = std::fs::remove_dir_all(&preview_dir);
         return Err(format!(
             "git archive failed for branch '{}': {}",
             branch,
-            String::from_utf8_lossy(&arch_out.stderr).trim()
+            String::from_utf8_lossy(&primary.stderr).trim()
         ));
-    }
+    };
 
     std::fs::write(&archive_path, &arch_out.stdout)
         .map_err(|e| format!("Failed to write archive: {e}"))?;
@@ -1452,15 +1436,20 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
     // Symlink node_modules from the live repo checkout to skip install
     let main_modules = repo.join("node_modules");
     if main_modules.exists() {
-        // Clear Vite's dependency cache before starting the preview server.
-        // Previous parallel preview runs share this cache and can corrupt it.
-        // Vite automatically rebuilds it on next startup — clearing is safe.
-        let _ = std::fs::remove_dir_all(main_modules.join(".vite"));
-
         let link = preview_dir.join("node_modules");
         if !link.exists() {
             let _ = std::os::unix::fs::symlink(&main_modules, &link);
         }
+    }
+
+    // Restore persisted .next cache for warm server startup.
+    // The cache is keyed by branch slug so different branches don't share state.
+    // If a cache exists from a prior run, symlink it in — Next.js writes directly
+    // into it, keeping it up to date without any post-run copy step.
+    let next_cache = std::env::temp_dir().join(format!("git-viz-next-cache-{slug}"));
+    let next_link = preview_dir.join(".next");
+    if next_cache.exists() {
+        let _ = std::os::unix::fs::symlink(&next_cache, &next_link);
     }
 
     // Launch dev server (PORT env var + --port flag for belt-and-suspenders)
@@ -1516,7 +1505,7 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
             return Err(format!("Dev server crashed.\nLog:\n{tail}"));
         }
 
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(200));
 
         // 1. Check the port we asked for
         if ureq::get(&requested_url).call().is_ok() {
@@ -1657,6 +1646,15 @@ fn run_previews_blocking(repo_path: String, branch: String, port: u16, paths: Ve
 
     let _ = std::fs::remove_file(&script_path);
     let _ = server.kill();
+
+    // Persist the .next cache for warm startup on subsequent runs.
+    // Only move if it's a real directory (first run); if it's already a symlink
+    // pointing at next_cache, the cache was updated in-place — nothing to do.
+    if next_link.exists() && !next_link.is_symlink() {
+        let _ = std::fs::remove_dir_all(&next_cache);
+        let _ = std::fs::rename(&next_link, &next_cache);
+    }
+
     let _ = std::fs::remove_dir_all(&preview_dir);
 
     match node_out {

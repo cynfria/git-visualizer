@@ -37,6 +37,8 @@ function App() {
   // so DiffViewer can skip the main-side server start for the common case.
   const [prewarmedMainShots, setPrewarmedMainShots] = useState<(string | null)[] | null>(null);
   const prewarmedRef = useRef(false);
+  const [prewarmedBranches, setPrewarmedBranches] = useState<Map<string, (string | null)[]>>(new Map());
+  const prewarmedBranchRef = useRef<string | null>(null);
   const [authSetupLoading, setAuthSetupLoading] = useState(false);
 
   async function loadRepo(path: string) {
@@ -165,6 +167,8 @@ function App() {
     setMapUiReady(false);
     setPrewarmedMainShots(null);
     prewarmedRef.current = false;
+    setPrewarmedBranches(new Map());
+    prewarmedBranchRef.current = null;
     setAuthSetupLoading(false);
   }, [repoPath]);
 
@@ -185,6 +189,36 @@ function App() {
     }).catch(() => { /* silent — DiffViewer will fall back to fresh generation */ });
   }, [repoPath, defaultBranch, branches.length]);
 
+  // Pre-warm: screenshot all active branches sequentially in the background.
+  // Uses port 3496 (one at a time) to avoid port conflicts.
+  // Results are stored by branch name — used instantly when user clicks.
+  useEffect(() => {
+    const activeBranches = branches.filter(b => b.commitsAhead > 0);
+    if (!repoPath || activeBranches.length === 0) return;
+    const key = activeBranches.map(b => b.name).join(',');
+    if (prewarmedBranchRef.current === key) return;
+    prewarmedBranchRef.current = key;
+    setPrewarmedBranches(new Map());
+    let cancelled = false;
+    (async () => {
+      for (const b of activeBranches) {
+        if (cancelled) break;
+        try {
+          const shots = await invoke<string[]>('generate_preview_routes', {
+            repoPath,
+            branch: b.name,
+            fallbackSha: b.headSha || null,
+            port: 3496,
+            paths: ['/'],
+          });
+          if (!cancelled) {
+            setPrewarmedBranches(prev => new Map(prev).set(b.name, shots.map(s => s.startsWith('data:') ? s : null)));
+          }
+        } catch { /* silent */ }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [repoPath, branches.length]);
 
   // ── Cmd+Shift+S: capture screenshots of main timeline + every branch detail ──
   useEffect(() => {
@@ -467,6 +501,7 @@ function App() {
               defaultBranch={defaultBranch}
               mergedPR={mergedPRs.find(p => p.branchName === selectedBranch.name)}
               prewarmedMainShots={prewarmedMainShots}
+              prewarmedBranchShots={prewarmedBranches.get(selectedBranch.name) ?? null}
               onBack={handleBackToMap}
             />
           </div>

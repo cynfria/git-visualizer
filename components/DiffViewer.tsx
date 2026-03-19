@@ -22,49 +22,13 @@ interface SummarySection {
 }
 
 // A single before/after screenshot pair for one URL route.
-function ComparisonRow({
-  route,
-  showRouteLabel,
-  mainSrc,
-  branchSrc,
-  mainTitle,
-  branchTitle,
-  mainLoading,
-  branchLoading,
-  mainError,
-  branchError,
-}: {
-  route: string;
-  showRouteLabel: boolean;
-  mainSrc: string | null;
-  branchSrc: string | null;
-  mainTitle: string;
-  branchTitle: string;
-  mainLoading: boolean;
-  branchLoading: boolean;
-  mainError: string | null;
-  branchError: string | null;
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      {showRouteLabel && (
-        <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium px-1">
-          {route}
-        </span>
-      )}
-      <div className="flex gap-4">
-        <PreviewPanel title={mainTitle} src={mainSrc} loading={mainLoading} error={mainError} />
-        <PreviewPanel title={branchTitle} src={branchSrc} loading={branchLoading} error={branchError} />
-      </div>
-    </div>
-  );
-}
 
-function PreviewPanel({ title, src, loading, error }: {
+function PreviewPanel({ title, src, loading, error, noVisualChanges }: {
   title: string;
   src: string | null;
   loading: boolean;
   error: string | null;
+  noVisualChanges?: boolean;
 }) {
   const [imgVisible, setImgVisible] = useState(false);
 
@@ -77,8 +41,13 @@ function PreviewPanel({ title, src, loading, error }: {
 
   return (
     <div className="flex-1 min-w-0 rounded-2xl bg-card border border-border flex flex-col overflow-hidden">
-      <div className="px-5 pt-5 pb-3 flex-shrink-0 border-b border-border/50">
+      <div className="px-5 pt-5 pb-3 flex-shrink-0 border-b border-border/50 flex items-center justify-between gap-3">
         <h2 className="text-sm font-semibold text-foreground truncate">{title}</h2>
+        {noVisualChanges && (
+          <div className="shrink-0 bg-muted rounded-full px-2.5 py-1 flex items-center">
+            <span className="text-[11px] text-muted-foreground leading-none">No visual changes</span>
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-auto">
         {src ? (
@@ -100,9 +69,18 @@ function PreviewPanel({ title, src, loading, error }: {
             <div className="h-24 bg-muted rounded-lg w-full" />
           </div>
         ) : error ? (
-          <div className="flex items-center justify-center h-40 px-5">
-            <p className="text-xs text-destructive text-center">{error}</p>
-          </div>
+          error.includes('not a valid object name') || error.includes('git archive failed') ? (
+            <div className="h-full flex items-center justify-center px-8">
+              <div className="text-center space-y-1.5">
+                <p className="text-sm font-medium text-foreground">Preview unavailable</p>
+                <p className="text-xs text-muted-foreground">This branch was deleted after merging and can no longer be checked out.</p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-40 px-5">
+              <p className="text-xs text-destructive text-center">{error}</p>
+            </div>
+          )
         ) : (
           <div className="flex items-center justify-center h-40">
             <p className="text-xs text-muted-foreground italic">No preview available</p>
@@ -120,6 +98,7 @@ interface DiffViewerProps {
   mergedPR?: MergedPR;
   onBack: () => void;
   prewarmedMainShots?: (string | null)[] | null;
+  prewarmedBranchShots?: (string | null)[] | null;
 }
 
 export default function DiffViewer({
@@ -129,6 +108,7 @@ export default function DiffViewer({
   mergedPR,
   onBack,
   prewarmedMainShots,
+  prewarmedBranchShots,
 }: DiffViewerProps) {
   const [commits, setCommits] = useState<Commit[]>([]);
   const [commitsLoading, setCommitsLoading] = useState(true);
@@ -285,14 +265,18 @@ export default function DiffViewer({
     if (gen !== genRef.current) return; // superseded by a newer call
     setRoutes(detectedRoutes);
 
-    // Use pre-warmed main screenshots if they cover exactly the detected routes (['/'])
-    const canUsePrewarm =
+    // Use pre-warmed screenshots if they cover exactly the detected routes (['/'])
+    const canUseMainPrewarm =
       prewarmedMainShots != null &&
       detectedRoutes.length === 1 &&
       detectedRoutes[0] === '/';
+    const canUseBranchPrewarm =
+      prewarmedBranchShots != null &&
+      detectedRoutes.length === 1 &&
+      detectedRoutes[0] === '/';
 
-    // Fire main and branch in parallel. If pre-warm covers main, resolve immediately.
-    const mainPromise: Promise<string[]> = canUsePrewarm
+    // Fire main and branch in parallel. Use prewarmed shots when available.
+    const mainPromise: Promise<string[]> = canUseMainPrewarm
       ? Promise.resolve(prewarmedMainShots!.map(s => s ?? ''))
       : invoke<string[]>('generate_preview_routes', {
           repoPath,
@@ -301,12 +285,15 @@ export default function DiffViewer({
           paths: detectedRoutes,
         });
 
-    const branchPromise: Promise<string[]> = invoke<string[]>('generate_preview_routes', {
-      repoPath,
-      branch: branch.name,
-      port: 3492,
-      paths: detectedRoutes,
-    });
+    const branchPromise: Promise<string[]> = canUseBranchPrewarm
+      ? Promise.resolve(prewarmedBranchShots!.map(s => s ?? ''))
+      : invoke<string[]>('generate_preview_routes', {
+          repoPath,
+          branch: branch.name,
+          fallbackSha: branch.headSha || null,
+          port: 3492,
+          paths: detectedRoutes,
+        });
 
     // Update each side as soon as it finishes (don't wait for the other)
     mainPromise
@@ -341,6 +328,10 @@ export default function DiffViewer({
 
   // Show auth button when loading is done but all shots are null (auth-gated redirects)
   const loadingDone = !mainLoading && !branchLoading;
+  const screenshotsMatch =
+    loadingDone && !mainError && !branchError &&
+    mainShots.length > 0 && branchShots.length > 0 &&
+    mainShots.every((s, i) => s != null && s === branchShots[i]);
   const showAuthButton =
     loadingDone && !mainError && !branchError &&
     mainShots.length > 0 && mainShots.every(s => s === null) &&
@@ -549,26 +540,79 @@ export default function DiffViewer({
           </div>
         </div>
 
-        {/* Right: preview comparisons — scrollable when multiple routes */}
-        <div className={`flex-1 min-w-0 min-h-0 ${multiRoute ? 'overflow-y-auto' : 'flex gap-4'}`}>
+        {/* Right: preview comparisons */}
+        <div className="flex-1 min-w-0 min-h-0 flex gap-4">
           {multiRoute ? (
-            <div className="space-y-6">
-              {routes.map((route, i) => (
-                <ComparisonRow
-                  key={route}
-                  route={route}
-                  showRouteLabel={true}
-                  mainTitle={defaultBranch}
-                  branchTitle={branch.name}
-                  mainSrc={mainShots[i] ?? null}
-                  branchSrc={branchShots[i] ?? null}
-                  mainLoading={mainLoading}
-                  branchLoading={branchLoading}
-                  mainError={mainError}
-                  branchError={branchError}
-                />
-              ))}
-            </div>
+            <>
+              {/* Main container — all routes stacked */}
+              <div className="flex-1 min-w-0 rounded-2xl bg-card border border-border flex flex-col overflow-hidden">
+                <div className="px-5 pt-5 pb-3 flex-shrink-0 border-b border-border/50">
+                  <h2 className="text-sm font-semibold text-foreground truncate">{defaultBranch}</h2>
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {routes.map((route, i) => (
+                    <div key={route}>
+                      {i > 0 && <div className="border-t border-border/50" />}
+                      <div className="px-5 pt-3 pb-1">
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">{route}</span>
+                      </div>
+                      {mainLoading ? (
+                        <div className="animate-pulse px-5 pb-4 space-y-2">
+                          <div className="h-32 bg-muted rounded-lg w-full" />
+                        </div>
+                      ) : mainError ? (
+                        <div className="px-5 pb-4">
+                          <p className="text-xs text-destructive">{mainError}</p>
+                        </div>
+                      ) : mainShots[i] ? (
+                        <img src={mainShots[i]!} alt={route} className="w-full" />
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+              {/* Branch container — all routes stacked */}
+              <div className="flex-1 min-w-0 rounded-2xl bg-card border border-border flex flex-col overflow-hidden">
+                <div className="px-5 pt-5 pb-3 flex-shrink-0 border-b border-border/50 flex items-center justify-between gap-3">
+                  <h2 className="text-sm font-semibold text-foreground truncate">{branch.name}</h2>
+                  {screenshotsMatch && (
+                    <div className="shrink-0 bg-muted rounded-full px-2.5 py-1 flex items-center">
+                      <span className="text-[11px] text-muted-foreground leading-none">No visual changes</span>
+                    </div>
+                  )}
+                </div>
+                <div className="flex-1 overflow-y-auto">
+                  {routes.map((route, i) => (
+                    <div key={route}>
+                      {i > 0 && <div className="border-t border-border/50" />}
+                      <div className="px-5 pt-3 pb-1">
+                        <span className="text-[10px] uppercase tracking-wide text-muted-foreground font-medium">{route}</span>
+                      </div>
+                      {branchLoading ? (
+                        <div className="animate-pulse px-5 pb-4 space-y-2">
+                          <div className="h-32 bg-muted rounded-lg w-full" />
+                        </div>
+                      ) : branchError ? (
+                        branchError.includes('not a valid object name') || branchError.includes('git archive failed') ? (
+                          <div className="px-5 pb-4 flex items-center">
+                            <div className="space-y-1">
+                              <p className="text-sm font-medium text-foreground">Preview unavailable</p>
+                              <p className="text-xs text-muted-foreground">This branch was deleted after merging and can no longer be checked out.</p>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="px-5 pb-4">
+                            <p className="text-xs text-destructive">{branchError}</p>
+                          </div>
+                        )
+                      ) : branchShots[i] ? (
+                        <img src={branchShots[i]!} alt={route} className="w-full" />
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </>
           ) : (
             <>
               <PreviewPanel
@@ -582,6 +626,7 @@ export default function DiffViewer({
                 src={branchShots[0] ?? null}
                 loading={branchLoading}
                 error={branchError}
+                noVisualChanges={screenshotsMatch}
               />
             </>
           )}

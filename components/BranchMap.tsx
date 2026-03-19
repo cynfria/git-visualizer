@@ -626,10 +626,23 @@ export default function BranchMap({
               <g
                 key={pr.number}
                 opacity={opacity}
-                style={{ cursor: mergedBranch ? 'pointer' : 'default', transition: 'opacity 0.15s' }}
+                style={{ cursor: 'pointer', transition: 'opacity 0.15s' }}
                 onMouseEnter={() => setHoveredPR(pr.number)}
                 onMouseLeave={() => { setHoveredPR(null); setHoveredPRCommit(null); }}
-                onClick={() => { if (mergedBranch) onBranchClick?.(mergedBranch); }}
+                onClick={() => {
+                  const target = mergedBranch ?? {
+                    name: pr.branchName,
+                    commitsAhead: 0,
+                    commitsBehind: 0,
+                    lastCommitDate: pr.mergedAt,
+                    lastCommitAuthor: pr.authorLogin,
+                    lastCommitAuthorAvatar: pr.authorAvatar,
+                    mergeable: false,
+                    status: 'unknown' as const,
+                    headSha: pr.mergeCommitSha,
+                  };
+                  onBranchClick?.(target);
+                }}
               >
                 {/* Wide invisible stroke for hover */}
                 <path d={arcPath} fill="none" stroke="transparent" strokeWidth={20} />
@@ -823,7 +836,7 @@ export default function BranchMap({
                       width={NODE_SIZE}
                       height={NODE_SIZE}
                       rx={2}
-                      fill={isSelected ? '#22d3ee' : isFocusedError ? color : '#1c1917'}
+                      fill={isSelected ? '#22d3ee' : (isFocusedError || isHovered) ? color : '#1c1917'}
                       stroke={color}
                       strokeWidth={strokeWidth}
                     />
@@ -1070,7 +1083,19 @@ export default function BranchMap({
           />
           <div className="flex items-center gap-2 shrink-0 bg-card border border-border rounded-full px-3 py-1">
             <button
-              onClick={() => setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100))}
+              onClick={() => {
+                const el = scrollRef.current;
+                if (el) {
+                  const mouseX = el.clientWidth / 2;
+                  setZoom(prev => {
+                    const next = Math.max(ZOOM_MIN, Math.round((prev - 0.25) * 100) / 100);
+                    zoomScrollAnchor.current = { contentX: el.scrollLeft + mouseX, mouseX, oldZoom: prev };
+                    return next;
+                  });
+                } else {
+                  setZoom(z => Math.max(ZOOM_MIN, Math.round((z - 0.25) * 100) / 100));
+                }
+              }}
               className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
               title="Zoom out"
             >
@@ -1080,7 +1105,19 @@ export default function BranchMap({
               {Math.round(zoom * 100)}%
             </span>
             <button
-              onClick={() => setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100))}
+              onClick={() => {
+                const el = scrollRef.current;
+                if (el) {
+                  const mouseX = el.clientWidth / 2;
+                  setZoom(prev => {
+                    const next = Math.min(ZOOM_MAX, Math.round((prev + 0.25) * 100) / 100);
+                    zoomScrollAnchor.current = { contentX: el.scrollLeft + mouseX, mouseX, oldZoom: prev };
+                    return next;
+                  });
+                } else {
+                  setZoom(z => Math.min(ZOOM_MAX, Math.round((z + 0.25) * 100) / 100));
+                }
+              }}
               className="text-sm text-muted-foreground hover:text-foreground transition-colors leading-none select-none"
               title="Zoom in"
             >
