@@ -7,6 +7,64 @@ use git::{Branch, DirectCommit, MergeNode};
 use github::{GitHubInfo, MergedPR, OpenPR};
 use std::path::Path;
 
+/// Resolve a CLI binary name to its full path.
+/// Checks common Homebrew / nvm / system locations so the app works when
+/// launched from a .app bundle where $PATH is minimal.
+fn resolve_bin(name: &str) -> String {
+    for dir in dev_path_dirs() {
+        let candidate = format!("{dir}/{name}");
+        if std::path::Path::new(&candidate).exists() {
+            return candidate;
+        }
+    }
+    // Fall back to bare name — shell PATH may still work in dev mode
+    name.to_string()
+}
+
+/// Build a PATH string that includes all common Node/package-manager locations.
+/// Used when spawning child processes from a .app bundle where $PATH is minimal.
+fn dev_path_env() -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs: Vec<String> = vec![
+        "/opt/homebrew/bin".into(),
+        "/opt/homebrew/sbin".into(),
+        "/usr/local/bin".into(),
+        "/usr/bin".into(),
+        "/bin".into(),
+        "/usr/sbin".into(),
+        "/sbin".into(),
+        format!("{home}/.volta/bin"),
+        format!("{home}/.cargo/bin"),
+        format!("{home}/n/bin"),
+    ];
+
+    // Resolve the active nvm node version directory, if present
+    let nvm_versions = std::path::Path::new(&home).join(".nvm/versions/node");
+    if nvm_versions.exists() {
+        if let Ok(entries) = std::fs::read_dir(&nvm_versions) {
+            let mut versions: Vec<_> = entries.flatten()
+                .filter(|e| e.path().is_dir())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .collect();
+            versions.sort();
+            if let Some(latest) = versions.last() {
+                dirs.push(format!("{home}/.nvm/versions/node/{latest}/bin"));
+            }
+        }
+    }
+
+    // Append existing PATH so nothing is lost
+    if let Ok(existing) = std::env::var("PATH") {
+        dirs.push(existing);
+    }
+
+    dirs.join(":")
+}
+
+fn dev_path_dirs() -> Vec<String> {
+    dev_path_env().split(':').map(|s| s.to_string()).collect()
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RepoInfo {
@@ -843,10 +901,11 @@ fn run_open_browser_blocking(repo_path: String, branch: String, port: u16) -> Re
         }
     }
 
-    let pm = if preview_dir.join("bun.lockb").exists() { "bun" }
+    let pm_name = if preview_dir.join("bun.lockb").exists() { "bun" }
         else if preview_dir.join("pnpm-lock.yaml").exists() { "pnpm" }
         else if preview_dir.join("yarn.lock").exists() { "yarn" }
         else { "npm" };
+    let pm = resolve_bin(pm_name);
 
     let main_modules = repo.join("node_modules");
     if main_modules.exists() {
@@ -858,7 +917,7 @@ fn run_open_browser_blocking(repo_path: String, branch: String, port: u16) -> Re
     }
 
     let port_str = port.to_string();
-    let pm_args: Vec<&str> = match pm {
+    let pm_args: Vec<&str> = match pm_name {
         "yarn" => vec!["dev", "--port", &port_str],
         "pnpm" => vec!["run", "dev", "--port", &port_str],
         _      => vec!["run", "dev", "--", "--port", &port_str],
@@ -873,16 +932,17 @@ fn run_open_browser_blocking(repo_path: String, branch: String, port: u16) -> Re
         Err(_) => (Stdio::null(), Stdio::null()),
     };
 
-    let mut server = std::process::Command::new(pm)
+    let mut server = std::process::Command::new(&pm)
         .args(&pm_args)
         .env("PORT", &port_str)
+        .env("PATH", dev_path_env())
         .current_dir(&preview_dir)
         .stdout(stdout_sink)
         .stderr(stderr_sink)
         .spawn()
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&preview_dir);
-            format!("Failed to start dev server ({pm}): {e}")
+            format!("Failed to start dev server ({pm_name}): {e}")
         })?;
 
     let requested_url = format!("http://localhost:{port}");
@@ -1428,10 +1488,11 @@ fn run_previews_blocking(repo_path: String, branch: String, fallback_sha: Option
     }
 
     // Detect package manager from lockfile
-    let pm = if preview_dir.join("bun.lockb").exists() { "bun" }
+    let pm_name = if preview_dir.join("bun.lockb").exists() { "bun" }
         else if preview_dir.join("pnpm-lock.yaml").exists() { "pnpm" }
         else if preview_dir.join("yarn.lock").exists() { "yarn" }
         else { "npm" };
+    let pm = resolve_bin(pm_name);
 
     // Symlink node_modules from the live repo checkout to skip install
     let main_modules = repo.join("node_modules");
@@ -1457,7 +1518,7 @@ fn run_previews_blocking(repo_path: String, branch: String, fallback_sha: Option
     // npm and bun strip '--' before forwarding to the script.
     // pnpm does NOT — it passes '--' literally, so 'pnpm run dev -- --port X'
     // becomes 'vite -- --port X' which vite ignores.  Omit '--' for pnpm.
-    let pm_args: Vec<&str> = match pm {
+    let pm_args: Vec<&str> = match pm_name {
         "yarn" => vec!["dev", "--port", &port_str],
         "pnpm" => vec!["run", "dev", "--port", &port_str],
         _      => vec!["run", "dev", "--", "--port", &port_str],
@@ -1474,16 +1535,17 @@ fn run_previews_blocking(repo_path: String, branch: String, fallback_sha: Option
         Err(_) => (Stdio::null(), Stdio::null()),
     };
 
-    let mut server = std::process::Command::new(pm)
+    let mut server = std::process::Command::new(&pm)
         .args(&pm_args)
         .env("PORT", &port_str)
+        .env("PATH", dev_path_env())
         .current_dir(&preview_dir)
         .stdout(stdout_sink)
         .stderr(stderr_sink)
         .spawn()
         .map_err(|e| {
             let _ = std::fs::remove_dir_all(&preview_dir);
-            format!("Failed to start dev server ({pm}): {e}")
+            format!("Failed to start dev server ({pm_name}): {e}")
         })?;
 
     // Poll until the server responds.  We try two URLs:
