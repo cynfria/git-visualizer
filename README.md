@@ -44,7 +44,7 @@
    the Rust backend, which takes a few minutes.
 
   ---
- ** Building for production**
+ **Building for production**
 
   pnpm tauri build
 
