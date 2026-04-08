@@ -23,7 +23,7 @@
 
   ## Setup
 
-  1. **Clone the repo**
+  1. Clone the repo
      ```bash
      git clone <repo-url>
      cd git-visualizer
@@ -36,7 +36,7 @@
   GITHUB_PAT=ghp_your_token_here
 
   ---
-  Running the app
+  **Running the app**
 
   pnpm tauri dev
 
@@ -44,14 +44,14 @@
    the Rust backend, which takes a few minutes.
 
   ---
-  Building for production
+ ** Building for production**
 
   pnpm tauri build
 
   The compiled app bundle will be in src-tauri/target/release/bundle/.
 
   ---
-  What it does
+  **What it does**
 
   - Branch timeline — SVG canvas showing all branches, merges, and direct commits over time
   - PR panel — open and merged pull requests fetched from GitHub, linked to branches on the map
