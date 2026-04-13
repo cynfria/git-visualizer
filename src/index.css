@@ -1,27 +1,27 @@
 @import 'tailwindcss';
 
-/* ── Space Grotesk Font ──────────────────────────────────────────────────── */
+/* ── Cash Sans Mono Font ─────────────────────────────────────────────────── */
 @font-face {
-  font-family: 'Space Grotesk';
-  src: url('/fonts/SpaceGrotesk-Light.otf') format('opentype');
+  font-family: 'Cash Sans Mono';
+  src: url('/fonts/CashSansMono-Light.woff2') format('woff2');
   font-weight: 300;
   font-style: normal;
 }
 @font-face {
-  font-family: 'Space Grotesk';
-  src: url('/fonts/SpaceGrotesk-Regular.otf') format('opentype');
+  font-family: 'Cash Sans Mono';
+  src: url('/fonts/CashSansMono-Regular.woff2') format('woff2');
   font-weight: 400;
   font-style: normal;
 }
 @font-face {
-  font-family: 'Space Grotesk';
-  src: url('/fonts/SpaceGrotesk-Medium.otf') format('opentype');
+  font-family: 'Cash Sans Mono';
+  src: url('/fonts/CashSansMono-Regular.woff2') format('woff2');
   font-weight: 500;
   font-style: normal;
 }
 @font-face {
-  font-family: 'Space Grotesk';
-  src: url('/fonts/SpaceGrotesk-Bold.otf') format('opentype');
+  font-family: 'Cash Sans Mono';
+  src: url('/fonts/CashSansMono-Regular.woff2') format('woff2');
   font-weight: 700;
   font-style: normal;
 }
@@ -42,7 +42,7 @@
   --destructive:       #DC2626;
   --destructive-foreground: #ffffff;
   --font-sans: system-ui, -apple-system, sans-serif;
-  --font-space-grotesk: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+  --font-space-grotesk: 'Cash Sans Mono', monospace;
 }
 
 /* ── Tailwind v4 theme mapping ───────────────────────────────────────────── */
@@ -70,7 +70,7 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* Space Grotesk for repo titles */
+/* Cash Sans Mono for repo titles */
 .font-space-grotesk {
   font-family: var(--font-space-grotesk);
 }

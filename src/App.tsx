@@ -634,7 +634,7 @@ function RepoSelector({
       {/* Right content panel */}
       <div className="flex-1 flex flex-col justify-center px-16 bg-background">
         <p className="font-light text-foreground w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '48px', lineHeight: 1 }}>Git visualizer</p>
-        <h1 className="font-bold text-foreground mb-14 w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '48px', lineHeight: 1.08 }}>
+        <h1 className="font-light text-muted-foreground mb-14 w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '48px', lineHeight: 1.08 }}>
           See what your team is building, without reading a line of code.
         </h1>
 
