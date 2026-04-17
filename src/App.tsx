@@ -523,7 +523,7 @@ function InteractiveDotField() {
     if (!rawCanvas) return;
     const canvas: HTMLCanvasElement = rawCanvas;
     const ctx = canvas.getContext('2d')!;
-    const SPACING = 20;
+    const SPACING = 10;
 
     function buildDots(w: number, h: number) {
       const arr: { x: number; y: number; phase: number }[] = [];
@@ -569,13 +569,12 @@ function InteractiveDotField() {
         const dist = Math.sqrt(ddx * ddx + ddy * ddy);
         const prox = Math.max(0, 1 - dist / INFLUENCE);
 
-        // Repel: push dot away from cursor
         const force = Math.pow(prox, 2) * MAX_PUSH;
         const drawX = dist > 0 ? d.x + (ddx / dist) * force : d.x;
         const drawY = dist > 0 ? d.y + (ddy / dist) * force : d.y;
 
         const opacity = pulse + prox * 0.4;
-        const r = 1.3 + prox * 1.2;
+        const r = 1.2 + prox * 1.2;
 
         ctx.beginPath();
         ctx.arc(drawX, drawY, r, 0, Math.PI * 2);
@@ -633,9 +632,9 @@ function RepoSelector({
 
       {/* Right content panel */}
       <div className="flex-1 flex flex-col justify-center px-16 bg-background">
-        <p className="font-light text-foreground w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '48px', lineHeight: 1 }}>Git visualizer</p>
-        <h1 className="font-light text-muted-foreground mb-14 w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '48px', lineHeight: 1.08 }}>
-          See what your team is building, without reading a line of code.
+        <p className="font-light text-foreground w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '40px', lineHeight: 1 }}>Canopy</p>
+        <h1 className="font-light text-muted-foreground mb-14 w-[60%]" style={{ fontFamily: 'var(--font-space-grotesk)', fontSize: '40px', lineHeight: 1.08 }}>
+          See every branch, commit, and PR at a glance
         </h1>
 
         <p className="text-sm text-muted-foreground mb-4">Get started</p>
